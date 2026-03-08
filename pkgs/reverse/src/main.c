@@ -97,6 +97,29 @@ typedef enum section_header_flag_e {
 	__SECTION_HEADER_FLAG_CNT,
 } section_header_flag_t;
 
+enum {
+	ELF_IDENT_CLASS,
+	ELF_IDENT_DATA,
+	ELF_INDENT_ELF_VERSION,
+	ELF_IDENT_OS_ABI,
+	ELF_IDENT_ABI_VERSION,
+	ELF_IDENT_PAD,
+};
+
+enum {
+	SECTION_HEADER_NAME_OFF,
+	SECTION_HEADER_NAME,
+	SECTION_HEADER_TYPE,
+	SECTION_HEADER_FLAG,
+	SECTION_HEADER_ADDRESS,
+	SECTION_HEADER_OFFSET,
+	SECTION_HEADER_SIZE,
+	SECTION_HEADER_LINK,
+	SECTION_HEADER_INFO,
+	SECTION_HEADER_ALIGN,
+	SECTION_HEADER_ENTRY_SIZE,
+};
+
 static void read_layout(bin_t *bin, size_t *off, schema_t *schema, uint layout, void *data)
 {
 	const schema_layout_t *l = schema_get_layout(schema, layout);
@@ -129,24 +152,24 @@ static void *read_elf_ident(bin_t *bin, size_t *off, schema_t *schema)
 	};
 
 	schema_field_desc_t fields[] = {
-		{STRVT("Class"), 1, SCHEMA_TYPE_ENUM, classes, sizeof(classes)},
-		{STRVT("Data"), 1, SCHEMA_TYPE_ENUM, datas, sizeof(datas)},
-		{STRVT("ELF Version"), 1, SCHEMA_TYPE_INT, NULL, 0},
-		{STRVT("OS ABI"), 1, SCHEMA_TYPE_ENUM, osabis, sizeof(osabis)},
-		{STRVT("ABI Version"), 1, SCHEMA_TYPE_INT, NULL, 0},
-		{STRVT("PAD"), 7, SCHEMA_TYPE_INT, NULL, 0},
+		[ELF_IDENT_CLASS]	 = {STRVT("Class"), 1, SCHEMA_TYPE_ENUM, classes, sizeof(classes)},
+		[ELF_IDENT_DATA]	 = {STRVT("Data"), 1, SCHEMA_TYPE_ENUM, datas, sizeof(datas)},
+		[ELF_INDENT_ELF_VERSION] = {STRVT("ELF Version"), 1, SCHEMA_TYPE_INT, NULL, 0},
+		[ELF_IDENT_OS_ABI]	 = {STRVT("OS ABI"), 1, SCHEMA_TYPE_ENUM, osabis, sizeof(osabis)},
+		[ELF_IDENT_ABI_VERSION]	 = {STRVT("ABI Version"), 1, SCHEMA_TYPE_INT, NULL, 0},
+		[ELF_IDENT_PAD]		 = {STRVT("PAD"), 7, SCHEMA_TYPE_INT, NULL, 0},
 	};
 
 	schema_init(schema, sizeof(fields) / sizeof(schema_field_desc_t), 1, 11, ALLOC_STD);
 	schema_add_fields(schema, fields, sizeof(fields));
 
 	schema_member_desc_t members[] = {
-		{0, 1},
-		{1, 1},
-		{2, 1},
-		{3, 1},
-		{4, 1},
-		{5, 7},
+		{ELF_IDENT_CLASS, 1},
+		{ELF_IDENT_DATA, 1},
+		{ELF_INDENT_ELF_VERSION, 1},
+		{ELF_IDENT_OS_ABI, 1},
+		{ELF_IDENT_ABI_VERSION, 1},
+		{ELF_IDENT_PAD, 7},
 	};
 
 	schema_add_layout(schema, members, sizeof(members), NULL);
@@ -161,6 +184,7 @@ static void *read_elf_ident(bin_t *bin, size_t *off, schema_t *schema)
 static void *read_elf(bin_t *bin, size_t *off, u8 class, schema_t *schema)
 {
 	static const schema_val_t types[] = {
+		{ELF_TYPE_EXEC, STRVT("Executable file")},
 		{ELF_TYPE_DYN, STRVT("Shared object")},
 	};
 
@@ -397,64 +421,64 @@ static void *read_section_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 	};
 
 	schema_field_desc_t fields[] = {
-		{STRVT("Name"), 4, SCHEMA_TYPE_INT, NULL, 0},
-		{STRVT("Name"), 0, SCHEMA_TYPE_STR, NULL, 0},
-		{STRVT("Type"), 4, SCHEMA_TYPE_ENUM, types, sizeof(types)},
-		{STRVT("Flag"), 8, SCHEMA_TYPE_FLAG, flags, sizeof(flags)},
-		{STRVT("Address"), 8, SCHEMA_TYPE_INT, NULL, 0},
-		{STRVT("Offset"), 8, SCHEMA_TYPE_INT, NULL, 0},
-		{STRVT("Size"), 8, SCHEMA_TYPE_INT, NULL, 0},
-		{STRVT("Link"), 4, SCHEMA_TYPE_INT, NULL, 0},
-		{STRVT("Info"), 4, SCHEMA_TYPE_INT, NULL, 0},
-		{STRVT("Align"), 8, SCHEMA_TYPE_INT, NULL, 0},
-		{STRVT("Entry size"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_NAME_OFF]   = {STRVT("Name"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_NAME]	    = {STRVT("Name"), 0, SCHEMA_TYPE_STR, NULL, 0},
+		[SECTION_HEADER_TYPE]	    = {STRVT("Type"), 4, SCHEMA_TYPE_ENUM, types, sizeof(types)},
+		[SECTION_HEADER_FLAG]	    = {STRVT("Flag"), 8, SCHEMA_TYPE_FLAG, flags, sizeof(flags)},
+		[SECTION_HEADER_ADDRESS]    = {STRVT("Address"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_OFFSET]	    = {STRVT("Offset"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_SIZE]	    = {STRVT("Size"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_LINK]	    = {STRVT("Link"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_INFO]	    = {STRVT("Info"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_ALIGN]	    = {STRVT("Align"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_ENTRY_SIZE] = {STRVT("Entry size"), 8, SCHEMA_TYPE_INT, NULL, 0},
 	};
 
 	tbl_init(tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 36, ALLOC_STD);
 	schema_add_fields(&tbl->schema, fields, sizeof(fields));
 
 	schema_member_desc_t members[] = {
-		{0, 4},
-		{1, 0},
-		{2, 4},
-		{3, 8},
-		{4, 8},
-		{5, 8},
-		{6, 8},
-		{7, 4},
-		{8, 4},
-		{9, 8},
-		{10, 8},
+		{SECTION_HEADER_NAME_OFF, 4},
+		{SECTION_HEADER_NAME, 0},
+		{SECTION_HEADER_TYPE, 4},
+		{SECTION_HEADER_FLAG, 8},
+		{SECTION_HEADER_ADDRESS, 8},
+		{SECTION_HEADER_OFFSET, 8},
+		{SECTION_HEADER_SIZE, 8},
+		{SECTION_HEADER_LINK, 4},
+		{SECTION_HEADER_INFO, 4},
+		{SECTION_HEADER_ALIGN, 8},
+		{SECTION_HEADER_ENTRY_SIZE, 8},
 	};
 
 	schema_add_layout(&tbl->schema, members, sizeof(members), NULL);
 
 	schema_member_desc_t members32[] = {
-		{0, 4},
-		{2, 4},
-		{3, 4},
-		{4, 4},
-		{5, 4},
-		{6, 4},
-		{7, 4},
-		{8, 4},
-		{9, 4},
-		{10, 4},
+		{SECTION_HEADER_NAME_OFF, 4},
+		{SECTION_HEADER_TYPE, 4},
+		{SECTION_HEADER_FLAG, 4},
+		{SECTION_HEADER_ADDRESS, 4},
+		{SECTION_HEADER_OFFSET, 4},
+		{SECTION_HEADER_SIZE, 4},
+		{SECTION_HEADER_LINK, 4},
+		{SECTION_HEADER_INFO, 4},
+		{SECTION_HEADER_ALIGN, 4},
+		{SECTION_HEADER_ENTRY_SIZE, 4},
 	};
 
 	schema_add_layout(&tbl->schema, members32, sizeof(members32), NULL);
 
 	schema_member_desc_t members64[] = {
-		{0, 4},
-		{2, 4},
-		{3, 8},
-		{4, 8},
-		{5, 8},
-		{6, 8},
-		{7, 4},
-		{8, 4},
-		{9, 8},
-		{10, 8},
+		{SECTION_HEADER_NAME_OFF, 4},
+		{SECTION_HEADER_TYPE, 4},
+		{SECTION_HEADER_FLAG, 8},
+		{SECTION_HEADER_ADDRESS, 8},
+		{SECTION_HEADER_OFFSET, 8},
+		{SECTION_HEADER_SIZE, 8},
+		{SECTION_HEADER_LINK, 4},
+		{SECTION_HEADER_INFO, 4},
+		{SECTION_HEADER_ALIGN, 8},
+		{SECTION_HEADER_ENTRY_SIZE, 8},
 	};
 
 	schema_add_layout(&tbl->schema, members64, sizeof(members64), NULL);
@@ -473,15 +497,106 @@ static void *read_section_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 		read_layout(bin, &o, &tbl->schema, layout, data);
 	}
 
-	uint offset_id = 5;
-
-	const u64 *offset = tbl_get_cell(tbl, shstrndx, offset_id);
+	const u64 *offset = tbl_get_cell(tbl, shstrndx, SECTION_HEADER_OFFSET);
 
 	const char *section_names_offset = &((char *)bin->buf.data)[*offset];
 
-	tbl_map(tbl, 0, 1, map_name, (void *)section_names_offset);
+	tbl_map(tbl, SECTION_HEADER_NAME_OFF, SECTION_HEADER_NAME, map_name, (void *)section_names_offset);
 
 	return tbl;
+}
+
+#define bit_is_set(data, bit) ((data) & (1 << (bit)))
+
+static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, size_t *off)
+{
+	dputf(DST_STD(), "[.text]\n");
+
+	for (u64 i = 0; i < size; i++) {
+		byte b;
+		bin_get_int(bin, &b, sizeof(b), off);
+		if ((b & 0xF0) == 0x40) {
+			if (bit_is_set(b, 3)) {
+				dputf(DST_STD(), "REX.W (64 Bit Operand Size)\n");
+			}
+
+			i++;
+			bin_get_int(bin, &b, sizeof(b), off);
+			switch (b) {
+			case 0x31: {
+				dputf(DST_STD(), "XOR r/m64, r64 (r/m64 XOR r64)\n");
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				if ((b & 0xC0) == 0xC0) {
+					if ((b & 0x38) == 0x38) {
+						dputf(DST_STD(), "RDI\n");
+					} else {
+						log_error("reverse", "main", NULL, "unknown register: %02X", b);
+					}
+
+					if ((b & 0x7) == 0x7) {
+						dputf(DST_STD(), "RDI\n");
+					} else {
+						log_error("reverse", "main", NULL, "unknown register: %02X", b);
+					}
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+				break;
+			}
+			case 0xC7: {
+				dputf(DST_STD(), "MOV r/m64, imm32 (Move imm32 sign extended to 64-bits to r/m64)\n");
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				if ((b & 0xC0) == 0xC0) {
+					if ((b & 0x3F) == 0x0) {
+						dputf(DST_STD(), "Into RAX\n");
+					} else {
+						log_error("reverse", "main", NULL, "unknown register: %02X", b);
+					}
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+
+				if (data == ELF_IDENT_DATA_LE) {
+					u32 value = b;
+					i++;
+					bin_get_int(bin, &b, sizeof(b), off);
+					i++;
+					bin_get_int(bin, &b, sizeof(b), off);
+					value <<= b;
+					i++;
+					bin_get_int(bin, &b, sizeof(b), off);
+					value <<= b;
+					i++;
+					bin_get_int(bin, &b, sizeof(b), off);
+					value <<= b;
+					dputf(DST_STD(), "Value: 0x%08X\n", value);
+				}
+
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown instruction: %02X", b);
+				break;
+			}
+			}
+		} else if (b == 0x0F) {
+			dputf(DST_STD(), "Extended opcode prefix\n");
+			i++;
+			bin_get_int(bin, &b, sizeof(b), off);
+			switch (b) {
+			case 0x05: {
+				dputf(DST_STD(), "syscall\n");
+				break;
+			}
+			}
+		} else {
+			log_error("reverse", "main", NULL, "unknown opcode: %02X", b);
+		}
+	}
+
+	return 0;
 }
 
 static int read_elf_header(bin_t *bin, size_t *off)
@@ -489,8 +604,8 @@ static int read_elf_header(bin_t *bin, size_t *off)
 	dputf(DST_STD(), "[ELF IDENT]\n");
 	schema_t elf_ident_schema = {0};
 	void *elf_ident		  = read_elf_ident(bin, off, &elf_ident_schema);
-	uint class_id		  = 0;
-	const u8 *class		  = schema_get_val(&elf_ident_schema, class_id, elf_ident);
+	const u8 *class		  = schema_get_val(&elf_ident_schema, ELF_IDENT_CLASS, elf_ident);
+	const u8 *data		  = schema_get_val(&elf_ident_schema, ELF_IDENT_DATA, elf_ident);
 	schema_print_data(&elf_ident_schema, 0, elf_ident, DST_STD());
 
 	dputf(DST_STD(), "[ELF]\n");
@@ -518,6 +633,21 @@ static int read_elf_header(bin_t *bin, size_t *off)
 	read_section_header(bin, *class, *shnum, *shoff, *shentsize, *shstrndx, &sh_tbl);
 	dputf(DST_STD(), "[Section headers]\n");
 	tbl_print(&sh_tbl, DST_STD());
+
+	byte *row;
+	uint i = 0;
+	row_foreach(&sh_tbl, i, row)
+	{
+		const size_t *name_off = schema_get_val(&sh_tbl.schema, SECTION_HEADER_NAME, row);
+		const u64 *offset      = schema_get_val(&sh_tbl.schema, SECTION_HEADER_OFFSET, row);
+		const u64 *size	       = schema_get_val(&sh_tbl.schema, SECTION_HEADER_SIZE, row);
+
+		strv_t name = strvbuf_get(&sh_tbl.strs, *name_off);
+		if (strv_eq(name, STRV(".text"))) {
+			u64 tmp = *offset;
+			read_text_section(bin, *size, *data, &tmp);
+		}
+	}
 
 	tbl_free(&sh_tbl);
 	tbl_free(&ph_tbl);
