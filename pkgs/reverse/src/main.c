@@ -97,100 +97,50 @@ typedef enum section_header_flag_e {
 	__SECTION_HEADER_FLAG_CNT,
 } section_header_flag_t;
 
-typedef struct layout_enum_s {
-	u64 val;
-	strv_t str;
-} layout_enum_t;
-
-typedef struct field_def_desc_s {
-	strv_t name;
-	size_t size;
-	field_type_t type;
-	const layout_enum_t *vals;
-	size_t vals_size;
-} field_def_desc_t;
-
-typedef struct field_desc_s {
-	uint def;
-	size_t size;
-} field_desc_t;
-
-static void init_defs(field_def_desc_t *defs, size_t size, schema_t *schema)
-{
-	for (uint i = 0; i < size / sizeof(field_def_desc_t); i++) {
-		uint def;
-		field_def_t *d =
-			schema_add_def(schema, defs[i].type, defs[i].name, defs[i].size, defs[i].vals_size / sizeof(layout_enum_t), &def);
-		switch (defs[i].type) {
-		case FIELD_TYPE_ENUM:
-		case FIELD_TYPE_FLAG:
-			for (uint j = 0; j < defs[i].vals_size / sizeof(layout_enum_t); j++) {
-				void *val = schema_add_val(schema, def, defs[i].vals[j].str);
-				mem_copy(val, d->size, &defs[i].vals[j].val, d->size);
-			}
-		default: break;
-		}
-	}
-}
-
-static void init_layout(field_desc_t *fields, size_t size, schema_t *schema)
-{
-	uint layout;
-	schema_add_layout(schema, size / sizeof(field_desc_t), &layout);
-
-	for (uint i = 0; i < size / sizeof(field_desc_t); i++) {
-		schema_add_field(schema, layout, fields[i].def, fields[i].size, NULL);
-	}
-
-	schema_map_layout(schema, layout);
-}
-
 static void read_layout(bin_t *bin, size_t *off, schema_t *schema, uint layout, void *data)
 {
-	const layout_t *l = schema_get_layout(schema, layout);
-	field_t *field;
-	uint i = 0;
-	field_foreach(l, i, field)
-	{
-		void *val = bin_get(bin, field->size, off);
+	const schema_layout_t *l = schema_get_layout(schema, layout);
+
+	for (uint i = l->members; i < l->members + l->members_cnt; i++) {
+		const schema_member_t *member = schema_get_member(schema, layout, i - l->members);
+		void *val		      = bin_get(bin, member->size, off);
 		if (val == NULL) {
 			return;
 		}
-		schema_set_val(schema, layout, i, data, val);
+		schema_set_val(schema, layout, i - l->members, data, val);
 	}
 }
 
 static void *read_elf_ident(bin_t *bin, size_t *off, schema_t *schema)
 {
-	static const layout_enum_t classes[] = {
+	static const schema_val_t classes[] = {
 		{ELF_IDENT_CLASS_32, STRVT("32-bit format")},
 		{ELF_IDENT_CLASS_64, STRVT("64-bit format")},
 
 	};
 
-	static const layout_enum_t datas[] = {
+	static const schema_val_t datas[] = {
 		{ELF_IDENT_DATA_LE, STRVT("Little endian")},
 		{ELF_IDENT_DATA_BE, STRVT("Big endian")},
 
 	};
-	static const layout_enum_t osabis[] = {
+	static const schema_val_t osabis[] = {
 		{ELF_IDENT_OSABI_SYSTEM_V, STRVT("System V")},
 	};
 
-	field_def_desc_t defs[] = {
-		{STRVT("Class"), 1, FIELD_TYPE_ENUM, classes, sizeof(classes)},
-		{STRVT("Data"), 1, FIELD_TYPE_ENUM, datas, sizeof(datas)},
-		{STRVT("ELF Version"), 1, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("OS ABI"), 1, FIELD_TYPE_ENUM, osabis, sizeof(osabis)},
-		{STRVT("ABI Version"), 1, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("PAD"), 7, FIELD_TYPE_INT, NULL, 0},
+	schema_field_desc_t fields[] = {
+		{STRVT("Class"), 1, SCHEMA_TYPE_ENUM, classes, sizeof(classes)},
+		{STRVT("Data"), 1, SCHEMA_TYPE_ENUM, datas, sizeof(datas)},
+		{STRVT("ELF Version"), 1, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("OS ABI"), 1, SCHEMA_TYPE_ENUM, osabis, sizeof(osabis)},
+		{STRVT("ABI Version"), 1, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("PAD"), 7, SCHEMA_TYPE_INT, NULL, 0},
 	};
 
-	schema_init(schema, sizeof(defs) / sizeof(field_def_desc_t), 1, 11, ALLOC_STD);
+	schema_init(schema, sizeof(fields) / sizeof(schema_field_desc_t), 1, 11, ALLOC_STD);
+	schema_add_fields(schema, fields, sizeof(fields));
 
-	init_defs(defs, sizeof(defs), schema);
-
-	field_desc_t fields[] = {
+	schema_member_desc_t members[] = {
 		{0, 1},
 		{1, 1},
 		{2, 1},
@@ -199,9 +149,9 @@ static void *read_elf_ident(bin_t *bin, size_t *off, schema_t *schema)
 		{5, 7},
 	};
 
-	init_layout(fields, sizeof(fields), schema);
+	schema_add_layout(schema, members, sizeof(members), NULL);
 
-	const layout_t *layout = schema_get_layout(schema, 0);
+	const schema_layout_t *layout = schema_get_layout(schema, 0);
 
 	void *data = mem_alloc(layout->size);
 	read_layout(bin, off, schema, 0, data);
@@ -210,36 +160,35 @@ static void *read_elf_ident(bin_t *bin, size_t *off, schema_t *schema)
 
 static void *read_elf(bin_t *bin, size_t *off, u8 class, schema_t *schema)
 {
-	static const layout_enum_t types[] = {
+	static const schema_val_t types[] = {
 		{ELF_TYPE_DYN, STRVT("Shared object")},
 	};
 
-	static const layout_enum_t machines[] = {
+	static const schema_val_t machines[] = {
 		{ELF_MACHINE_X86, STRVT("x86")},
 		{ELF_MACHINE_AMD_X86_64, STRVT("AMD x86_64")},
 	};
 
-	field_def_desc_t defs[] = {
-		{STRVT("Type"), 2, FIELD_TYPE_ENUM, types, sizeof(types)},
-		{STRVT("Machine"), 2, FIELD_TYPE_ENUM, machines, sizeof(machines)},
-		{STRVT("ELF Orig Version"), 4, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Entry"), 8, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Program Header Offset"), 8, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Section Header Offset"), 8, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Flags"), 4, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("ELF Header Size"), 2, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Program Header Entry Size"), 2, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Number of Program Header Entries"), 2, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Section Header Entry Size"), 2, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Number of Section Header Entries"), 2, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Section Headers Names Index"), 2, FIELD_TYPE_INT, NULL, 0},
+	schema_field_desc_t fields[] = {
+		{STRVT("Type"), 2, SCHEMA_TYPE_ENUM, types, sizeof(types)},
+		{STRVT("Machine"), 2, SCHEMA_TYPE_ENUM, machines, sizeof(machines)},
+		{STRVT("ELF Orig Version"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Entry"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Program Header Offset"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Section Header Offset"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Flags"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("ELF Header Size"), 2, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Program Header Entry Size"), 2, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Number of Program Header Entries"), 2, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Section Header Entry Size"), 2, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Number of Section Header Entries"), 2, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Section Headers Names Index"), 2, SCHEMA_TYPE_INT, NULL, 0},
 	};
 
-	schema_init(schema, sizeof(defs) / sizeof(field_def_desc_t), 3, 16, ALLOC_STD);
+	schema_init(schema, sizeof(fields) / sizeof(schema_field_desc_t), 3, 16, ALLOC_STD);
+	schema_add_fields(schema, fields, sizeof(fields));
 
-	init_defs(defs, sizeof(defs), schema);
-
-	field_desc_t fields[] = {
+	schema_member_desc_t members[] = {
 		{0, 2},
 		{1, 2},
 		{2, 4},
@@ -255,9 +204,9 @@ static void *read_elf(bin_t *bin, size_t *off, u8 class, schema_t *schema)
 		{12, 2},
 	};
 
-	init_layout(fields, sizeof(fields), schema);
+	schema_add_layout(schema, members, sizeof(members), NULL);
 
-	field_desc_t fields32[] = {
+	schema_member_desc_t members32[] = {
 		{0, 2},
 		{1, 2},
 		{2, 4},
@@ -273,9 +222,9 @@ static void *read_elf(bin_t *bin, size_t *off, u8 class, schema_t *schema)
 		{12, 2},
 	};
 
-	init_layout(fields32, sizeof(fields32), schema);
+	schema_add_layout(schema, members32, sizeof(members32), NULL);
 
-	field_desc_t fields64[] = {
+	schema_member_desc_t members64[] = {
 		{0, 2},
 		{1, 2},
 		{2, 4},
@@ -291,7 +240,7 @@ static void *read_elf(bin_t *bin, size_t *off, u8 class, schema_t *schema)
 		{12, 2},
 	};
 
-	init_layout(fields64, sizeof(fields64), schema);
+	schema_add_layout(schema, members64, sizeof(members64), NULL);
 
 	uint layout;
 	switch (class) {
@@ -307,7 +256,7 @@ static void *read_elf(bin_t *bin, size_t *off, u8 class, schema_t *schema)
 
 static void *read_program_header(bin_t *bin, u8 class, u16 num, u64 off, u16 size, tbl_t *tbl)
 {
-	static const layout_enum_t types[] = {
+	static const schema_val_t types[] = {
 		{PROGRAM_HEADER_TYPE_NULL, STRVT("NULL")},
 		{PROGRAM_HEADER_TYPE_LOAD, STRVT("Loadable")},
 		{PROGRAM_HEADER_TYPE_DYNAMIC, STRVT("Dynamic linking")},
@@ -323,28 +272,28 @@ static void *read_program_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 
 	};
 
-	static const layout_enum_t flags[] = {
+	static const schema_val_t flags[] = {
 		{PROGRAM_HEADER_FLAG_X, STRVT("X")},
 		{PROGRAM_HEADER_FLAG_W, STRVT("W")},
 		{PROGRAM_HEADER_FLAG_R, STRVT("R")},
 	};
 
-	field_def_desc_t defs[] = {
-		{STRVT("Type"), 4, FIELD_TYPE_ENUM, types, sizeof(types)},
-		{STRVT("Flag"), 4, FIELD_TYPE_FLAG, flags, sizeof(flags)},
-		{STRVT("Offset"), 8, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Virtual address"), 8, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Physical address"), 8, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("File size"), 8, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Mem size"), 8, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Align"), 8, FIELD_TYPE_INT, NULL, 0},
+	schema_field_desc_t fields[] = {
+		{STRVT("Type"), 4, SCHEMA_TYPE_ENUM, types, sizeof(types)},
+		{STRVT("Flag"), 4, SCHEMA_TYPE_FLAG, flags, sizeof(flags)},
+		{STRVT("Offset"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Virtual address"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Physical address"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("File size"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Mem size"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Align"), 8, SCHEMA_TYPE_INT, NULL, 0},
 	};
 
-	tbl_init(tbl, sizeof(defs) / sizeof(field_def_desc_t), 3, 23, ALLOC_STD);
+	tbl_init(tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 23, ALLOC_STD);
 
-	init_defs(defs, sizeof(defs), &tbl->schema);
+	schema_add_fields(&tbl->schema, fields, sizeof(fields));
 
-	field_desc_t fields[] = {
+	schema_member_desc_t members[] = {
 		{0, 4},
 		{1, 4},
 		{2, 8},
@@ -355,9 +304,9 @@ static void *read_program_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 		{7, 8},
 	};
 
-	init_layout(fields, sizeof(fields), &tbl->schema);
+	schema_add_layout(&tbl->schema, members, sizeof(members), NULL);
 
-	field_desc_t fields32[] = {
+	schema_member_desc_t members32[] = {
 		{0, 4},
 		{2, 4},
 		{3, 4},
@@ -368,9 +317,9 @@ static void *read_program_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 		{7, 4},
 	};
 
-	init_layout(fields32, sizeof(fields32), &tbl->schema);
+	schema_add_layout(&tbl->schema, members32, sizeof(members32), NULL);
 
-	field_desc_t fields64[] = {
+	schema_member_desc_t members64[] = {
 		{0, 4},
 		{1, 4},
 		{2, 8},
@@ -381,7 +330,7 @@ static void *read_program_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 		{7, 8},
 	};
 
-	init_layout(fields64, sizeof(fields64), &tbl->schema);
+	schema_add_layout(&tbl->schema, members64, sizeof(members64), NULL);
 	tbl_init_rows(tbl, num, ALLOC_STD);
 
 	uint layout;
@@ -416,7 +365,7 @@ static int map_name(tbl_t *tbl, uint row, uint col, const void *data, void *priv
 
 static void *read_section_header(bin_t *bin, u8 class, u16 num, u64 off, u16 size, u16 shstrndx, tbl_t *tbl)
 {
-	static const layout_enum_t types[] = {
+	static const schema_val_t types[] = {
 		{SECTION_HEADER_TYPE_NULL, STRVT("NULL")},
 		{SECTION_HEADER_TYPE_PROGBITS, STRVT("Program data")},
 		{SECTION_HEADER_TYPE_SYMTAB, STRVT("Symbol table")},
@@ -436,7 +385,7 @@ static void *read_section_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 		{SECTION_HEADER_TYPE_GNU_VERSYM, STRVT("GNU_VERSYM")},
 	};
 
-	static const layout_enum_t flags[] = {
+	static const schema_val_t flags[] = {
 		{SECTION_HEADER_FLAG_WRITE, STRVT("W")},
 		{SECTION_HEADER_FLAG_ALLOC, STRVT("A")},
 		{SECTION_HEADER_FLAG_EXECINSTR, STRVT("X")},
@@ -447,25 +396,24 @@ static void *read_section_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 		{SECTION_HEADER_FLAG_LINK_ORDER, STRVT("L")},
 	};
 
-	field_def_desc_t defs[] = {
-		{STRVT("Name"), 4, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Name"), 0, FIELD_TYPE_STR, NULL, 0},
-		{STRVT("Type"), 4, FIELD_TYPE_ENUM, types, sizeof(types)},
-		{STRVT("Flag"), 8, FIELD_TYPE_FLAG, flags, sizeof(flags)},
-		{STRVT("Address"), 8, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Offset"), 8, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Size"), 8, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Link"), 4, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Info"), 4, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Align"), 8, FIELD_TYPE_INT, NULL, 0},
-		{STRVT("Entry size"), 8, FIELD_TYPE_INT, NULL, 0},
+	schema_field_desc_t fields[] = {
+		{STRVT("Name"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Name"), 0, SCHEMA_TYPE_STR, NULL, 0},
+		{STRVT("Type"), 4, SCHEMA_TYPE_ENUM, types, sizeof(types)},
+		{STRVT("Flag"), 8, SCHEMA_TYPE_FLAG, flags, sizeof(flags)},
+		{STRVT("Address"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Offset"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Size"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Link"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Info"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Align"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		{STRVT("Entry size"), 8, SCHEMA_TYPE_INT, NULL, 0},
 	};
 
-	tbl_init(tbl, sizeof(defs) / sizeof(field_def_desc_t), 3, 36, ALLOC_STD);
+	tbl_init(tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 36, ALLOC_STD);
+	schema_add_fields(&tbl->schema, fields, sizeof(fields));
 
-	init_defs(defs, sizeof(defs), &tbl->schema);
-
-	field_desc_t fields[] = {
+	schema_member_desc_t members[] = {
 		{0, 4},
 		{1, 0},
 		{2, 4},
@@ -479,9 +427,9 @@ static void *read_section_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 		{10, 8},
 	};
 
-	init_layout(fields, sizeof(fields), &tbl->schema);
+	schema_add_layout(&tbl->schema, members, sizeof(members), NULL);
 
-	field_desc_t fields32[] = {
+	schema_member_desc_t members32[] = {
 		{0, 4},
 		{2, 4},
 		{3, 4},
@@ -494,9 +442,9 @@ static void *read_section_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 		{10, 4},
 	};
 
-	init_layout(fields32, sizeof(fields32), &tbl->schema);
+	schema_add_layout(&tbl->schema, members32, sizeof(members32), NULL);
 
-	field_desc_t fields64[] = {
+	schema_member_desc_t members64[] = {
 		{0, 4},
 		{2, 4},
 		{3, 8},
@@ -509,7 +457,7 @@ static void *read_section_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 		{10, 8},
 	};
 
-	init_layout(fields64, sizeof(fields64), &tbl->schema);
+	schema_add_layout(&tbl->schema, members64, sizeof(members64), NULL);
 	tbl_init_rows(tbl, num, ALLOC_STD);
 
 	uint layout;
