@@ -1,4 +1,7 @@
+#include "alloc.h"
 #include "args.h"
+#include "arr.h"
+#include "dst.h"
 #include "fs.h"
 #include "log.h"
 #include "mem.h"
@@ -507,71 +510,408 @@ static void *read_section_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 }
 
 #define bit_is_set(data, bit) ((data) & (1 << (bit)))
+#define bits(data, off, mask) (((data) >> (off)) & (mask))
 
-static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, size_t *off)
+typedef enum opcode_e {
+	OP_UNKNOWN,
+	OP_NOP,
+	OP_SYSCALL,
+	OP_ENDBR64,
+	OP_ADD,
+	OP_SUB,
+	OP_XOR,
+	OP_CMP,
+	OP_PUSH,
+	OP_POP,
+	OP_JE,
+	OP_AND,
+	OP_TEST,
+	OP_MOV_REG,
+	OP_MOV_RIP,
+	OP_MOV_IMM,
+	OP_LEA,
+	OP_SHR,
+	OP_SAR,
+	OP_RET,
+	OP_HLT,
+	OP_CALL,
+	OP_JMP,
+} opcode_t;
+
+typedef enum reg_e {
+	REG_UNKNOWN,
+	REG_ECX,
+	REG_EBP,
+	REG_RAX,
+	REG_RCX,
+	REG_RDX,
+	REG_RSP,
+	REG_RSI,
+	REG_RDI,
+	REG_R9,
+} reg_t;
+
+enum {
+	X86_PREFIX_EXT	   = 0x0F,
+	X86_PREFIX_CS	   = 0x2E,
+	X86_PREFIX_OP_SIZE = 0x66,
+	X86_PREFIX_CET	   = 0xF3,
+};
+
+enum {
+	X86_OP_ADD	= 0x01,
+	X86_OP_SUB	= 0x29,
+	X86_OP_XOR	= 0x31,
+	X86_OP_CMP	= 0x39,
+	X86_OP_PUSH_RAX = 0x50,
+	X86_OP_PUSH_RSP = 0x54,
+	X86_OP_POP_RSI	= 0x5E,
+	X86_OP_JE	= 0x74,
+	X86_OP_AND	= 0x83,
+	X86_OP_TEST	= 0x85,
+	X86_OP_MOV_REG	= 0x89,
+	X86_OP_MOV_RIP	= 0x8B,
+	X86_OP_LEA	= 0x8D,
+	X86_OP_SHR	= 0xC1,
+	X86_OP_RET	= 0xC3,
+	X86_OP_MOV_IMM	= 0xC7,
+	X86_OP_SAR1	= 0xD1,
+	X86_OP_HLT	= 0xF4,
+};
+
+enum {
+	X86_REG_ECX = 0x1,
+	X86_REG_EBP = 0x5,
+};
+
+enum {
+	X86_REG_RAX = 0x0,
+	X86_REG_RCX = 0x1,
+	X86_REG_RDX = 0x2,
+	X86_REG_RSP = 0x4,
+	X86_REG_RSI = 0x6,
+	X86_REG_RDI = 0x7,
+	X86_REG_R9  = 0x9,
+};
+
+enum {
+	X86_INST_SYSCALL = 0x5,
+};
+
+enum {
+	X86_INST_ENDBR64 = 0xFA,
+};
+
+enum {
+	X86_EXT_OPCODE_GROUP = 0x1E,
+	X86_NOP_OPCODE_GROUP = 0x1F,
+	X86_JMP_OPCODE_GROUP = 0xFF,
+};
+
+typedef struct instruction_s {
+	opcode_t opcode;
+	u64 d;
+	u64 s;
+} instruction_t;
+
+static reg_t read_reg64(u8 address)
+{
+	switch (address) {
+	case X86_REG_RAX: return REG_RAX;
+	case X86_REG_RCX: return REG_RCX;
+	case X86_REG_RDX: return REG_RDX;
+	case X86_REG_RSP: return REG_RSP;
+	case X86_REG_RSI: return REG_RSI;
+	case X86_REG_RDI: return REG_RDI;
+	case X86_REG_R9: return REG_R9;
+	default: log_error("reverse", "main", NULL, "unknown reg64: %02X", address);
+	}
+
+	return 0;
+}
+
+static reg_t read_reg32(u8 address)
+{
+	switch (address) {
+	case X86_REG_ECX: return REG_ECX;
+	case X86_REG_EBP: return REG_EBP;
+	default: log_error("reverse", "main", NULL, "unknown reg32: %02X", address);
+	}
+
+	return 0;
+}
+
+static int read_val(bin_t *bin, u64 *i, u64 *dst, uint size, size_t *off)
+{
+	*dst = 0;
+	for (uint j = 0; j < size; j++) {
+		byte b;
+		(*i)++;
+		bin_get_int(bin, &b, sizeof(b), off);
+		dputf(DST_STD(), "%02X: VALUE\n", b);
+		*dst |= (b << (8 * j));
+	}
+
+	return 0;
+}
+
+static int read_byte(bin_t *bin, u64 *i, byte *b, size_t *off)
+{
+	i++;
+	bin_get_int(bin, b, sizeof(byte), off);
+	dputf(DST_STD(), "%02X: ", *b);
+}
+
+static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t *instructions, size_t *off)
 {
 	dputf(DST_STD(), "[.text]\n");
 
 	for (u64 i = 0; i < size; i++) {
 		byte b;
 		bin_get_int(bin, &b, sizeof(b), off);
-		if ((b & 0xF0) == 0x40) {
-			if (bit_is_set(b, 3)) {
-				dputf(DST_STD(), "REX.W (64 Bit Operand Size)\n");
-			}
+		dputf(DST_STD(), "%02X: ", b);
+		if (bits(b, 4, 0xF) == 0x4) { // REX
+			instruction_t *instruction = arr_add(instructions, NULL);
 
+			int rex_w = bit_is_set(b, 3); // REX.W (64 Bit Operand Size)
+			int rex_b = bit_is_set(b, 0); // REX.B (Extension of the ModR/M r/m field, SIB base field, or Opcode reg field)
+			dputf(DST_STD(), "REX prefix: %s%s\n", rex_w ? "W" : "", rex_b ? "B" : "");
 			i++;
 			bin_get_int(bin, &b, sizeof(b), off);
+			dputf(DST_STD(), "%02X: ", b);
+
 			switch (b) {
-			case 0x31: {
-				dputf(DST_STD(), "XOR r/m64, r64 (r/m64 XOR r64)\n");
+			case X86_OP_ADD: { // ADD r/m64, r64 (Add r64 to r/m64)
+				dputf(DST_STD(), "ADD\n");
+				instruction->opcode = OP_ADD;
 				i++;
 				bin_get_int(bin, &b, sizeof(b), off);
-				if ((b & 0xC0) == 0xC0) {
-					if ((b & 0x38) == 0x38) {
-						dputf(DST_STD(), "RDI\n");
+				dputf(DST_STD(), "%02X: ", b);
+				if (bits(b, 6, 0x3) == 0x3) { // register operand
+					dputf(DST_STD(), "REG_REG\n");
+					instruction->d = read_reg64(bits(b, 3, 0x7));
+					instruction->s = read_reg64(bits(b, 0, 0x7));
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+				break;
+			}
+			case X86_OP_SUB: { // SUB r/m64, r64 (Subtract r64 from r/m64)
+				dputf(DST_STD(), "SUB\n");
+				instruction->opcode = OP_SUB;
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (bits(b, 6, 0x3) == 0x3) { // register operand
+					dputf(DST_STD(), "REG_REG\n");
+					instruction->d = read_reg64(bits(b, 3, 0x7));
+					instruction->s = read_reg64(bits(b, 0, 0x7));
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+				break;
+			}
+			case X86_OP_XOR: { // XOR r/m64, r64 (r/m64 XOR r64)
+				dputf(DST_STD(), "XOR\n");
+				instruction->opcode = OP_XOR;
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (bits(b, 6, 0x3) == 0x3) { // register operand
+					dputf(DST_STD(), "REG_REG\n");
+					instruction->d = read_reg64(bits(b, 3, 0x7));
+					instruction->s = read_reg64(bits(b, 0, 0x7));
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+				break;
+			}
+			case X86_OP_CMP: { // CMP r/m64,r64 (Compare r64 with r/m64)
+				dputf(DST_STD(), "CMP\n");
+				instruction->opcode = OP_CMP;
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (bits(b, 6, 0x3) == 0x3) { // register operand
+					dputf(DST_STD(), "REG_REG\n");
+					instruction->d = read_reg64(bits(b, 3, 0x7));
+					instruction->s = read_reg64(bits(b, 0, 0x7));
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+				break;
+			}
+			case X86_OP_AND: { // AND r/m64, imm8 (r/m64 AND imm8 (sign-extended))
+				dputf(DST_STD(), "AND\n");
+				instruction->opcode = OP_AND;
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (bits(b, 6, 0x3) == 0x3) { // register operand
+					dputf(DST_STD(), "REG_IMM\n");
+					instruction->d = read_reg64(bits(b, 0, 0x7));
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(bin, &i, &instruction->s, 1, off);
 					} else {
-						log_error("reverse", "main", NULL, "unknown register: %02X", b);
-					}
-
-					if ((b & 0x7) == 0x7) {
-						dputf(DST_STD(), "RDI\n");
-					} else {
-						log_error("reverse", "main", NULL, "unknown register: %02X", b);
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
 					}
 				} else {
 					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
 				}
 				break;
 			}
-			case 0xC7: {
-				dputf(DST_STD(), "MOV r/m64, imm32 (Move imm32 sign extended to 64-bits to r/m64)\n");
+			case X86_OP_TEST: { // TEST r/m64, r64 (rAND r64 with r/m64; set SF, ZF, PF according to result.)
+				dputf(DST_STD(), "TEST\n");
+				instruction->opcode = OP_TEST;
 				i++;
 				bin_get_int(bin, &b, sizeof(b), off);
-				if ((b & 0xC0) == 0xC0) {
-					if ((b & 0x3F) == 0x0) {
-						dputf(DST_STD(), "Into RAX\n");
+				dputf(DST_STD(), "%02X: ", b);
+				if (bits(b, 6, 0x3) == 0x3) { // register operand
+					dputf(DST_STD(), "REG_REG\n");
+					instruction->d = read_reg64(bits(b, 3, 0x7));
+					instruction->s = read_reg64(bits(b, 0, 0x7));
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+				break;
+			}
+			case X86_OP_MOV_REG: { // MOV r/m64, r64 (Move r64 to r/m64)
+				dputf(DST_STD(), "MOV_REG\n");
+				instruction->opcode = OP_MOV_REG;
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (bits(b, 6, 0x3) == 0x3) { // register operand
+					dputf(DST_STD(), "REG_REG\n");
+					instruction->s = read_reg64(bits(b, 3, 0x7));
+					if (rex_b) {
+						instruction->d = read_reg64(8 + bits(b, 0, 0x7));
 					} else {
-						log_error("reverse", "main", NULL, "unknown register: %02X", b);
+						instruction->d = read_reg64(bits(b, 0, 0x7));
 					}
 				} else {
 					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
 				}
 
-				if (data == ELF_IDENT_DATA_LE) {
-					u32 value = b;
-					i++;
-					bin_get_int(bin, &b, sizeof(b), off);
-					i++;
-					bin_get_int(bin, &b, sizeof(b), off);
-					value <<= b;
-					i++;
-					bin_get_int(bin, &b, sizeof(b), off);
-					value <<= b;
-					i++;
-					bin_get_int(bin, &b, sizeof(b), off);
-					value <<= b;
-					dputf(DST_STD(), "Value: 0x%08X\n", value);
+				break;
+			}
+			case X86_OP_MOV_RIP: { // MOV r64, r/m64 (Move r/m64 to r64)
+				dputf(DST_STD(), "MOV_RIP\n");
+				instruction->opcode = OP_MOV_RIP;
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (bits(b, 6, 0x3) == 0x0) { // register operand
+					dputf(DST_STD(), "REG_RIP\n");
+					instruction->d = read_reg64(bits(b, 3, 0x7));
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(bin, &i, &instruction->s, 4, off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+
+				break;
+			}
+			case X86_OP_LEA: { // LEA r64,m (Store effective address for m in register r64)
+				dputf(DST_STD(), "LEA\n");
+				instruction->opcode = OP_LEA;
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (bits(b, 6, 0x3) == 0x0) { // register operand
+					dputf(DST_STD(), "REG_RIP\n");
+					instruction->d = read_reg64(bits(b, 3, 0x7));
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(bin, &i, &instruction->s, 4, off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+
+				break;
+			}
+			case X86_OP_SHR: { // SHR r/m64, imm8 (Unsigned divide r/m64 by 2, imm8 times)
+				dputf(DST_STD(), "SHR/SAR\n");
+
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (bits(b, 3, 0x7) == 0x5) { // register operand
+					dputf(DST_STD(), "SHR\n");
+					instruction->opcode = OP_SHR;
+					if (bits(b, 6, 0x3) == 0x3) { // register operand
+						dputf(DST_STD(), "REG_IMM\n");
+						instruction->d = read_reg64(bits(b, 0, 0x7));
+						if (data == ELF_IDENT_DATA_LE) {
+							read_val(bin, &i, &instruction->s, 1, off);
+						} else {
+							log_error("reverse", "main", NULL, "unknown data: %d", data);
+						}
+					} else {
+						log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+					}
+				} else if (bits(b, 3, 0x7) == 0x7) {
+					dputf(DST_STD(), "SAR\n");
+					instruction->opcode = OP_SAR;
+					if (bits(b, 6, 0x3) == 0x3) { // register operand
+						dputf(DST_STD(), "REG_IMM\n");
+						instruction->d = read_reg64(bits(b, 0, 0x7));
+						if (data == ELF_IDENT_DATA_LE) {
+							read_val(bin, &i, &instruction->s, 1, off);
+						} else {
+							log_error("reverse", "main", NULL, "unknown data: %d", data);
+						}
+					} else {
+						log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+					}
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+
+				break;
+			}
+			case X86_OP_MOV_IMM: { // MOV r/m64, imm32 (Move imm32 sign extended to 64-bits to r/m64)
+				dputf(DST_STD(), "MOV_IMM\n");
+				instruction->opcode = OP_MOV_IMM;
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (bits(b, 6, 0x3) == 0x3) { // register operand
+					dputf(DST_STD(), "REG_IMM\n");
+					instruction->d = read_reg64(bits(b, 0, 0x7));
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(bin, &i, &instruction->s, 4, off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+				break;
+			}
+			case X86_OP_SAR1: { // SAR r/m64, 1 (Signed divide r/m64 by 2, once.)
+				dputf(DST_STD(), "SAR1\n");
+
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (bits(b, 3, 0x7) == 0x7) {
+					dputf(DST_STD(), "SAR1\n");
+					instruction->opcode = OP_SAR;
+					if (bits(b, 6, 0x3) == 0x3) { // register operand
+						dputf(DST_STD(), "REG\n");
+						instruction->d = read_reg64(bits(b, 0, 0x7));
+						instruction->s = 1;
+					} else {
+						log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+					}
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
 				}
 
 				break;
@@ -581,21 +921,307 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, size_t
 				break;
 			}
 			}
-		} else if (b == 0x0F) {
-			dputf(DST_STD(), "Extended opcode prefix\n");
+		} else if (b == X86_PREFIX_EXT) { // Extended opcode prefix
+			dputf(DST_STD(), "EXT prefix\n");
+			instruction_t *instruction = arr_add(instructions, NULL);
 			i++;
 			bin_get_int(bin, &b, sizeof(b), off);
+			dputf(DST_STD(), "%02X: ", b);
 			switch (b) {
-			case 0x05: {
-				dputf(DST_STD(), "syscall\n");
+			case X86_INST_SYSCALL: {
+				dputf(DST_STD(), "SYSCALL\n");
+				instruction->opcode = OP_SYSCALL;
 				break;
 			}
+			case X86_NOP_OPCODE_GROUP: {
+				dputf(DST_STD(), "NOP OPCODE_GROUP\n");
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (bits(b, 6, 0x3) == 0x2) { // register operand
+					dputf(DST_STD(), "OPERANDS\n");
+					instruction->opcode = OP_NOP;
+					instruction->d	    = read_reg64(bits(b, 3, 0x7));
+					instruction->s	    = bits(b, 0, 0x7);
+					for (uint j = 0; j < 4; j++) {
+						i++;
+						bin_get_int(bin, &b, sizeof(b), off);
+						dputf(DST_STD(), "%02X: ", b);
+						if (b == 0x00) {
+							dputf(DST_STD(), "NOP\n");
+						} else {
+							log_error("reverse", "main", NULL, "unknown NOP: %02X", b);
+						}
+					}
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown EXT prefix: %02X", b);
+				break;
+			}
+			}
+		} else if (b == X86_PREFIX_OP_SIZE) {
+			dputf(DST_STD(), "OP-SIZE prefix\n");
+			i++;
+			bin_get_int(bin, &b, sizeof(b), off);
+			dputf(DST_STD(), "%02X: ", b);
+			if (b == X86_PREFIX_CS) { // CS segment prefix
+				dputf(DST_STD(), "CS segment prefix\n");
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (b == X86_PREFIX_EXT) { // Extended opcode prefix
+					dputf(DST_STD(), "EXT prefix\n");
+					i++;
+					bin_get_int(bin, &b, sizeof(b), off);
+					dputf(DST_STD(), "%02X: ", b);
+					if (b == X86_NOP_OPCODE_GROUP) { // NOP opcode group
+						dputf(DST_STD(), "NOP OPCODE_GROUP\n");
+						i++;
+						bin_get_int(bin, &b, sizeof(b), off);
+						dputf(DST_STD(), "%02X: ", b);
+						if (bits(b, 6, 0x3) == 0x2) { // register operand
+							dputf(DST_STD(), "OPERANDS\n");
+							instruction_t *instruction = arr_add(instructions, NULL);
+							instruction->opcode	   = OP_NOP;
+							instruction->d		   = read_reg64(bits(b, 3, 0x7));
+							instruction->s		   = bits(b, 0, 0x7);
+							i++;
+							bin_get_int(bin, &b, sizeof(b), off);
+							dputf(DST_STD(), "%02X: ", b);
+							if (b == 0) {
+								dputf(DST_STD(), "SIB\n");
+							}
+							for (uint j = 0; j < instruction->s; j++) {
+								i++;
+								bin_get_int(bin, &b, sizeof(b), off);
+								dputf(DST_STD(), "%02X: ", b);
+								if (b == 0x00) {
+									dputf(DST_STD(), "NOP\n");
+								} else {
+									log_error("reverse", "main", NULL, "unknown NOP: %02X", b);
+								}
+							}
+						} else {
+							log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+						}
+					} else {
+						log_error("reverse", "main", NULL, "unknown CET opcode group: %02X", b);
+					}
+				} else {
+					log_error("reverse", "main", NULL, "unknown CET prefix: %02X", b);
+				}
+			} else if (b == X86_PREFIX_EXT) {
+				dputf(DST_STD(), "EXT prefix\n");
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (b == X86_NOP_OPCODE_GROUP) { // NOP opcode group
+					dputf(DST_STD(), "NOP OPCODE_GROUP\n");
+					i++;
+					bin_get_int(bin, &b, sizeof(b), off);
+					dputf(DST_STD(), "%02X: ", b);
+					if (bits(b, 6, 0x3) == 0x1) { // register operand
+						dputf(DST_STD(), "OPERANDS\n");
+						instruction_t *instruction = arr_add(instructions, NULL);
+						instruction->opcode	   = OP_NOP;
+						instruction->d		   = read_reg64(bits(b, 3, 0x7));
+						instruction->s		   = read_reg64(bits(b, 0, 0x7));
+						for (uint j = 0; j < 2; j++) {
+							i++;
+							bin_get_int(bin, &b, sizeof(b), off);
+							dputf(DST_STD(), "%02X: ", b);
+							if (b == 0x00) {
+								dputf(DST_STD(), "NOP\n");
+							} else {
+								log_error("reverse", "main", NULL, "unknown NOP: %02X", b);
+							}
+						}
+					} else {
+						log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+					}
+				} else {
+					log_error("reverse", "main", NULL, "unknown CET opcode group: %02X", b);
+				}
+			} else {
+				log_error("reverse", "main", NULL, "unknown OP-SIZE prefix: %02X", b);
+			}
+		} else if (b == X86_PREFIX_CET) { // CET prefix
+			dputf(DST_STD(), "CET prefix\n");
+			instruction_t *instruction = arr_add(instructions, NULL);
+			i++;
+			bin_get_int(bin, &b, sizeof(b), off);
+			dputf(DST_STD(), "%02X: ", b);
+			if (b == X86_PREFIX_EXT) { // Extended opcode prefix
+				dputf(DST_STD(), "EXT prefix\n");
+				i++;
+				bin_get_int(bin, &b, sizeof(b), off);
+				dputf(DST_STD(), "%02X: ", b);
+				if (b == X86_EXT_OPCODE_GROUP) { // extended opcode group
+					dputf(DST_STD(), "EXTENDED OPCODE_GROUP\n");
+					i++;
+					bin_get_int(bin, &b, sizeof(b), off);
+					dputf(DST_STD(), "%02X: ", b);
+					switch (b) {
+					case X86_INST_ENDBR64: {
+						dputf(DST_STD(), "ENDBR64\n");
+						instruction->opcode = OP_ENDBR64;
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown CET opcode: %02X", b);
+						break;
+					}
+					}
+				} else {
+					log_error("reverse", "main", NULL, "unknown CET opcode group: %02X", b);
+				}
+			} else {
+				log_error("reverse", "main", NULL, "unknown CET prefix: %02X", b);
+			}
+		} else if (b == X86_OP_XOR) { // XOR r/m32, r32 (r/m32 XOR r32)
+			dputf(DST_STD(), "XOR\n");
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_XOR;
+			i++;
+			bin_get_int(bin, &b, sizeof(b), off);
+			dputf(DST_STD(), "%02X: ", b);
+			if (bits(b, 6, 0x3) == 0x3) { // register operand
+				dputf(DST_STD(), "OPERANDS\n");
+				instruction->d = read_reg32(bits(b, 3, 0x7));
+				instruction->s = read_reg32(bits(b, 0, 0x7));
+			} else {
+				log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+			}
+		} else if (b == X86_OP_PUSH_RSP) { // PUSH r64 (Push r64)
+			dputf(DST_STD(), "PUSH RSP\n");
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_PUSH;
+			instruction->d		   = REG_RSP;
+		} else if (b == X86_OP_PUSH_RAX) { // PUSH r64 (Push r64)
+			dputf(DST_STD(), "PUSH RAX\n");
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_PUSH;
+			instruction->d		   = REG_RAX;
+		} else if (b == X86_OP_POP_RSI) { // POP r64 (Pop top of stack into r64; increment stack pointer. Cannot encode 32-bit
+						  // operand size.)
+			dputf(DST_STD(), "POP RSI\n");
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_POP;
+			instruction->d		   = REG_RSI;
+		} else if (b == X86_OP_JE) { // JE rel8 (Jump short if equal (ZF=1))
+			dputf(DST_STD(), "JE\n");
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_JE;
+			read_val(bin, &i, &instruction->d, 1, off);
+		} else if (b == X86_OP_RET) { // RET (Near return to calling procedure.)
+			dputf(DST_STD(), "RET\n");
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_RET;
+		} else if (b == X86_OP_HLT) { // HLT (Halt)
+			dputf(DST_STD(), "HLT\n");
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_HLT;
+		} else if (b == X86_JMP_OPCODE_GROUP) { //"JMP OPCODE_GROUP
+			dputf(DST_STD(), "JMP OPCODE_GROUP\n");
+			instruction_t *instruction = arr_add(instructions, NULL);
+			i++;
+			bin_get_int(bin, &b, sizeof(b), off);
+			dputf(DST_STD(), "%02X: ", b);
+			if (bits(b, 3, 0x7) == 0x2) { // CALL r/m64 (Call near, absolute indirect, address given in r/m64.)
+				instruction->opcode = OP_CALL;
+				dputf(DST_STD(), "CALL ");
+				if (bits(b, 6, 0x3) == 0x0) { // register operand
+					dputf(DST_STD(), "RIP\n");
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(bin, &i, &instruction->s, 4, off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+			} else if (bits(b, 3, 0x7) ==
+				   0x4) { // JMP r/m64 (Jump near, absolute indirect, RIP = 64-Bit offset from register or memory.)
+				instruction->opcode = OP_JMP;
+				dputf(DST_STD(), "JMP ");
+				if (bits(b, 6, 0x3) == 0x3) { // register operand
+					dputf(DST_STD(), "REG\n");
+					instruction->d = read_reg64(bits(b, 0, 0x7));
+				} else {
+					log_error("reverse", "main", NULL, "unknown ModRM Byte: %02X", b);
+				}
+			} else {
+				log_error("reverse", "main", NULL, "unknown JMP OPCODE_GROUP: %02X", b);
 			}
 		} else {
 			log_error("reverse", "main", NULL, "unknown opcode: %02X", b);
 		}
 	}
 
+	return 0;
+}
+
+static int print_reg(reg_t reg)
+{
+	switch (reg) {
+	case REG_ECX: {
+		dputf(DST_STD(), "ECX");
+		break;
+	}
+	case REG_EBP: {
+		dputf(DST_STD(), "EBP");
+		break;
+	}
+	case REG_RAX: {
+		dputf(DST_STD(), "RAX");
+		break;
+	}
+	case REG_RCX: {
+		dputf(DST_STD(), "RCX");
+		break;
+	}
+	case REG_RDX: {
+		dputf(DST_STD(), "RDX");
+		break;
+	}
+	case REG_RSP: {
+		dputf(DST_STD(), "RSP");
+		break;
+	}
+	case REG_RSI: {
+		dputf(DST_STD(), "RSI");
+		break;
+	}
+	case REG_RDI: {
+		dputf(DST_STD(), "RDI");
+		break;
+	}
+	case REG_R9: {
+		dputf(DST_STD(), "R9");
+		break;
+	}
+	default: {
+		log_error("reverse", "main", NULL, "unknown register: %02X", reg);
+		break;
+	}
+	}
+
+	return 0;
+}
+
+static int print_val8(u8 val)
+{
+	dputf(DST_STD(), "0x%02X", val);
+	return 0;
+}
+
+static int print_val32(u32 val)
+{
+	dputf(DST_STD(), "0x%08X", val);
 	return 0;
 }
 
@@ -644,8 +1270,174 @@ static int read_elf_header(bin_t *bin, size_t *off)
 
 		strv_t name = strvbuf_get(&sh_tbl.strs, *name_off);
 		if (strv_eq(name, STRV(".text"))) {
-			u64 tmp = *offset;
-			read_text_section(bin, *size, *data, &tmp);
+			u64 tmp		   = *offset;
+			arr_t instructions = {0};
+			arr_init(&instructions, 16, sizeof(instruction_t), ALLOC_STD);
+			read_text_section(bin, *size, *data, &instructions, &tmp);
+			dputf(DST_STD(), "[instructions]\n");
+			uint i = 0;
+			instruction_t *instruction;
+			arr_foreach(&instructions, i, instruction)
+			{
+				switch (instruction->opcode) {
+				case OP_NOP: {
+					dputf(DST_STD(), "NOP ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), " ");
+					print_val8(instruction->s);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_SYSCALL: {
+					dputf(DST_STD(), "syscall\n");
+					break;
+				}
+				case OP_ENDBR64: {
+					dputf(DST_STD(), "endbr64\n");
+					break;
+				}
+				case OP_ADD: {
+					dputf(DST_STD(), "ADD ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), " ");
+					print_reg(instruction->s);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_SUB: {
+					dputf(DST_STD(), "SUB ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), " ");
+					print_reg(instruction->s);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_XOR: {
+					dputf(DST_STD(), "XOR ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), " ");
+					print_reg(instruction->s);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_CMP: {
+					dputf(DST_STD(), "CMP ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), " ");
+					print_reg(instruction->s);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_PUSH: {
+					dputf(DST_STD(), "PUSH ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_POP: {
+					dputf(DST_STD(), "POP ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_JE: {
+					dputf(DST_STD(), "JE ");
+					print_val8(instruction->d);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_AND: {
+					dputf(DST_STD(), "AND ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), " ");
+					print_val8(instruction->s);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_TEST: {
+					dputf(DST_STD(), "TEST ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), " ");
+					print_reg(instruction->s);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_MOV_REG: {
+					dputf(DST_STD(), "MOV ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), " ");
+					print_reg(instruction->s);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_MOV_RIP: {
+					dputf(DST_STD(), "MOV ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), " [RIP+");
+					print_val32(instruction->s);
+					dputf(DST_STD(), "]\n");
+					break;
+				}
+				case OP_MOV_IMM: {
+					dputf(DST_STD(), "MOV ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), " ");
+					print_val32(instruction->s);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_LEA: {
+					dputf(DST_STD(), "LEA ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), " [RIP+");
+					print_val32(instruction->s);
+					dputf(DST_STD(), "]\n");
+					break;
+				}
+				case OP_SHR: {
+					dputf(DST_STD(), "SHR ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), " ");
+					print_val8(instruction->s);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_SAR: {
+					dputf(DST_STD(), "SAR ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), " ");
+					print_val8(instruction->s);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case OP_RET: {
+					dputf(DST_STD(), "RET\n");
+					break;
+				}
+				case OP_HLT: {
+					dputf(DST_STD(), "HLT\n");
+					break;
+				}
+				case OP_CALL: {
+					dputf(DST_STD(), "CALL [RIP+");
+					print_val32(instruction->s);
+					dputf(DST_STD(), "]\n");
+					break;
+				}
+				case OP_JMP: {
+					dputf(DST_STD(), "JMP ");
+					print_reg(instruction->d);
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown opcode: %02X", instruction->opcode);
+					break;
+				}
+				}
+			}
+
+			arr_free(&instructions);
 		}
 	}
 
