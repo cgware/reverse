@@ -5,6 +5,7 @@
 #include "fs.h"
 #include "log.h"
 #include "mem.h"
+#include "proc.h"
 #include "tbl.h"
 
 typedef enum elf_ident_class_e {
@@ -514,41 +515,56 @@ static void *read_section_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 
 typedef enum opcode_e {
 	OP_UNKNOWN,
+	OP_SECTION,
+	OP_GLOBAL,
+	OP_LABEL,
+	OP_NOP,
 	OP_NOP8,
 	OP_NOP32,
 	OP_SYSCALL,
 	OP_ENDBR64,
-	OP_ADD,
-	OP_SUB,
+	OP_ADD_REG,
+	OP_ADD_IMM,
+	OP_SUB_REG,
+	OP_SUB_IMM,
 	OP_XOR,
 	OP_CMP,
+	OP_CMP_IMM,
 	OP_PUSH,
 	OP_POP,
 	OP_JE,
+	OP_JNE,
 	OP_AND,
 	OP_TEST,
 	OP_MOV_REG,
 	OP_MOV_RIP,
+	OP_MOV_IMM8,
 	OP_MOV_IMM,
 	OP_LEA,
 	OP_SHR,
 	OP_SAR,
 	OP_RET,
 	OP_HLT,
-	OP_CALL,
-	OP_JMP,
+	OP_CALL_REG,
+	OP_CALL_RIP,
+	OP_CALL_REL,
+	OP_JMP_REG,
+	OP_JMP_IMM,
 } opcode_t;
 
 typedef enum reg_e {
 	REG_UNKNOWN,
+	REG_EAX,
 	REG_ECX,
 	REG_EBP,
 	REG_RAX,
 	REG_RCX,
 	REG_RDX,
 	REG_RSP,
+	REG_RBP,
 	REG_RSI,
 	REG_RDI,
+	REG_R8,
 	REG_R9,
 } reg_t;
 
@@ -566,17 +582,25 @@ enum {
 	X86_OP_CMP	= 0x39,
 	X86_OP_PUSH_RAX = 0x50,
 	X86_OP_PUSH_RSP = 0x54,
+	X86_OP_PUSH_RBP = 0x55,
+	X86_OP_POP_RBP	= 0x5D,
 	X86_OP_POP_RSI	= 0x5E,
 	X86_OP_JE	= 0x74,
-	X86_OP_AND	= 0x83,
+	X86_OP_JNE	= 0x75,
+	X86_OP_CMP_IMM	= 0x80,
+	X86_OP_ALU	= 0x83,
 	X86_OP_TEST	= 0x85,
 	X86_OP_MOV_REG	= 0x89,
 	X86_OP_MOV_RIP	= 0x8B,
 	X86_OP_LEA	= 0x8D,
+	X86_OP_MOV_EAX	= 0xB8,
 	X86_OP_SHR_SAR	= 0xC1,
 	X86_OP_RET	= 0xC3,
+	X86_OP_MOV_IMM8 = 0xC6,
 	X86_OP_MOV_IMM	= 0xC7,
 	X86_OP_SAR1	= 0xD1,
+	X86_OP_CALL	= 0xE8,
+	X86_OP_JMP	= 0xE9,
 	X86_OP_HLT	= 0xF4,
 	X86_OP_JMP_CALL = 0xFF,
 };
@@ -601,8 +625,10 @@ enum {
 	X86_REG_RCX = 0x1,
 	X86_REG_RDX = 0x2,
 	X86_REG_RSP = 0x4,
+	X86_REG_RBP = 0x5,
 	X86_REG_RSI = 0x6,
 	X86_REG_RDI = 0x7,
+	X86_REG_R8  = 0x8,
 	X86_REG_R9  = 0x9,
 };
 
@@ -611,6 +637,8 @@ typedef struct instruction_s {
 	u64 d;
 	u64 s;
 	u8 sib;
+	const char *str;
+	u64 addr;
 } instruction_t;
 
 static reg_t read_reg64(u8 address)
@@ -620,8 +648,10 @@ static reg_t read_reg64(u8 address)
 	case X86_REG_RCX: return REG_RCX;
 	case X86_REG_RDX: return REG_RDX;
 	case X86_REG_RSP: return REG_RSP;
+	case X86_REG_RBP: return REG_RBP;
 	case X86_REG_RSI: return REG_RSI;
 	case X86_REG_RDI: return REG_RDI;
+	case X86_REG_R8: return REG_R8;
 	case X86_REG_R9: return REG_R9;
 	default: log_error("reverse", "main", NULL, "unknown reg64: %02X", address);
 	}
@@ -663,12 +693,11 @@ static int read_val(bin_t *bin, u64 *dst, uint size, size_t *off)
 	return 0;
 }
 
-static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t *instructions, size_t *off)
+static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t *instructions, size_t *off)
 {
-	dputf(DST_STD(), "[.text]\n");
-
 	int rex = 0;
 	int rex_w;
+	int rex_r;
 	int rex_b;
 	int op_size = 0;
 	int cs	    = 0;
@@ -690,7 +719,7 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
 			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_ADD;
+			instruction->opcode	   = OP_ADD_REG;
 			read_byte(bin, &b, off);
 			byte mod = bits(b, 6, 0x3);
 			switch (mod) {
@@ -720,7 +749,7 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
 			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_SUB;
+			instruction->opcode	   = OP_SUB_REG;
 			read_byte(bin, &b, off);
 			byte mod = bits(b, 6, 0x3);
 			switch (mod) {
@@ -754,8 +783,8 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			case 0x3: {
 				if (rex) {
 					dputf(DST_STD(), "[REG64, REG64]\n");
-					instruction->s = read_reg64(bits(b, 3, 0x7));
-					instruction->d = read_reg64(bits(b, 0, 0x7));
+					instruction->s = read_reg64(rex_r * 8 + bits(b, 3, 0x7));
+					instruction->d = read_reg64(rex_b * 8 + bits(b, 0, 0x7));
 				} else {
 					dputf(DST_STD(), "[REG32, REG32]\n");
 					instruction->s = read_reg32(bits(b, 3, 0x7));
@@ -804,8 +833,61 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			rex	= 0;
 			break;
 		}
-		case X86_OP_AND: { // AND r/m64, imm8 (r/m64 AND imm8 (sign-extended))
-			dputf(DST_STD(), "AND\n");
+		case X86_OP_CMP_IMM: { // CMP r/m8, imm8 (Compare imm8 with r/m8)
+			dputf(DST_STD(), "CMP_IMM\n");
+			if (rex || op_size || cs || cet) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
+
+			read_byte(bin, &b, off);
+			byte mod = bits(b, 6, 0x3);
+			switch (mod) {
+			case 0x0: {
+				byte reg = bits(b, 3, 0x7);
+				switch (reg) {
+				case 0x7: {
+					instruction_t *instruction = arr_add(instructions, NULL);
+					instruction->opcode	   = OP_CMP_IMM;
+					byte rm			   = bits(b, 0, 0x7);
+					switch (rm) {
+					case 0x5: {
+						dputf(DST_STD(), "[[RIP + disp32], imm8]\n");
+						if (data == ELF_IDENT_DATA_LE) {
+							read_val(bin, &instruction->d, 4, off);
+							read_val(bin, &instruction->s, 1, off);
+						} else {
+							log_error("reverse", "main", NULL, "unknown data: %d", data);
+						}
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown rm: %d", rm);
+						break;
+					}
+					}
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown reg: %d", reg);
+					break;
+				}
+				}
+
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			op_size = 0;
+			cs	= 0;
+			cet	= 0;
+			rex	= 0;
+			break;
+		}
+		case X86_OP_ALU: {
+			dputf(DST_STD(), "ALU\n");
 			if (!rex) {
 				log_error("reverse", "main", NULL, "expected REX prefix");
 			}
@@ -815,13 +897,70 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			read_byte(bin, &b, off);
 			byte mod = bits(b, 6, 0x3);
 			switch (mod) {
+			case 0x0: {
+				byte reg = bits(b, 3, 0x7);
+				switch (reg) {
+				case 0x7: { // CMP r/m64, imm8 (Compare imm8 with r/m64)
+					dputf(DST_STD(), "CMP [[RIP + disp32], imm8]\n");
+					instruction_t *instruction = arr_add(instructions, NULL);
+					instruction->opcode	   = OP_CMP_IMM;
+					byte rm			   = bits(b, 0, 0x7);
+					switch (rm) {
+					case 0x5: {
+						if (data == ELF_IDENT_DATA_LE) {
+							read_val(bin, &instruction->d, 4, off);
+							read_val(bin, &instruction->s, 1, off);
+						} else {
+							log_error("reverse", "main", NULL, "unknown data: %d", data);
+						}
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown rm: %d", rm);
+						break;
+					}
+					}
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown reg: %02X", reg);
+					break;
+				}
+				}
+				break;
+				break;
+			}
 			case 0x3: {
 				byte reg = bits(b, 3, 0x7);
 				switch (reg) {
-				case 0x4: {
+				case 0x0: { // ADD r/m64, imm8 (Add sign-extended imm8 to r/m64)
+					dputf(DST_STD(), "ADD [REG64, IMM8]\n");
+					instruction_t *instruction = arr_add(instructions, NULL);
+					instruction->opcode	   = OP_ADD_IMM;
+					instruction->d		   = read_reg64(bits(b, 0, 0x7));
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(bin, &instruction->s, 1, off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+					break;
+				}
+				case 0x4: { // AND r/m64, imm8 (r/m64 AND imm8 (sign-extended))
 					dputf(DST_STD(), "AND [REG64, IMM8]\n");
 					instruction_t *instruction = arr_add(instructions, NULL);
 					instruction->opcode	   = OP_AND;
+					instruction->d		   = read_reg64(bits(b, 0, 0x7));
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(bin, &instruction->s, 1, off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+					break;
+				}
+				case 0x5: { // SUB r/m64, imm8 (Subtract sign-extended imm8 from r/m64)
+					dputf(DST_STD(), "SUB [REG64, IMM8]\n");
+					instruction_t *instruction = arr_add(instructions, NULL);
+					instruction->opcode	   = OP_SUB_IMM;
 					instruction->d		   = read_reg64(bits(b, 0, 0x7));
 					if (data == ELF_IDENT_DATA_LE) {
 						read_val(bin, &instruction->s, 1, off);
@@ -894,11 +1033,7 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			case 0x03: {
 				dputf(DST_STD(), "[REG64, REG64]\n");
 				instruction->s = read_reg64(bits(b, 3, 0x7));
-				if (rex_b) {
-					instruction->d = read_reg64(8 + bits(b, 0, 0x7));
-				} else {
-					instruction->d = read_reg64(bits(b, 0, 0x7));
-				}
+				instruction->d = read_reg64(rex_b * 8 + bits(b, 0, 0x7));
 				break;
 			}
 			default: {
@@ -1000,6 +1135,21 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			rex	= 0;
 			break;
 		}
+		case X86_OP_MOV_EAX: { // MOV r32, imm32 (Move imm32 to r32)
+			dputf(DST_STD(), "MOV [EAX, imm32]\n");
+			if (rex || op_size || cs || cet) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_MOV_IMM;
+			instruction->d		   = REG_EAX;
+			if (data == ELF_IDENT_DATA_LE) {
+				read_val(bin, &instruction->s, 4, off);
+			} else {
+				log_error("reverse", "main", NULL, "unknown data: %d", data);
+			}
+			break;
+		}
 		case X86_OP_SHR_SAR: { // SHR r/m64, imm8 (Unsigned divide r/m64 by 2, imm8 times)
 			dputf(DST_STD(), "SHR/SAR\n");
 			if (!rex) {
@@ -1057,6 +1207,54 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			rex	= 0;
 			break;
 		}
+		case X86_OP_MOV_IMM8: { // MOV r/m8, imm8 (Move imm8 to r/m8)
+			dputf(DST_STD(), "MOV_IMM8\n");
+			if (rex || op_size || cs || cet) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
+			read_byte(bin, &b, off);
+			byte mod = bits(b, 6, 0x3);
+			switch (mod) {
+			case 0x0: {
+				byte reg = bits(b, 3, 0x7);
+				switch (reg) {
+				case 0x0: {
+					dputf(DST_STD(), "MOV_IMM8 [[RIP + disp32], imm8]\n");
+					instruction_t *instruction = arr_add(instructions, NULL);
+					instruction->opcode	   = OP_MOV_IMM8;
+					byte rm			   = bits(b, 0, 0x7);
+					switch (rm) {
+					case 0x5: {
+						read_val(bin, &instruction->d, 4, off);
+						read_val(bin, &instruction->s, 1, off);
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown rm: %02X", rm);
+						break;
+					}
+					}
+
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown reg: %02X", reg);
+					break;
+				}
+				}
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			op_size = 0;
+			cs	= 0;
+			cet	= 0;
+			rex	= 0;
+			break;
+		}
 		case X86_OP_MOV_IMM: { // MOV r/m64, imm32 (Move imm32 sign extended to 64-bits to r/m64)
 			dputf(DST_STD(), "MOV_IMM\n");
 			if (!rex) {
@@ -1101,6 +1299,120 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			rex	= 0;
 			break;
 		}
+		case X86_OP_PUSH_RSP: { // PUSH r64 (Push r64)
+			dputf(DST_STD(), "PUSH_RSP\n");
+			if (rex || op_size || cs || cet) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_PUSH;
+			instruction->d		   = REG_RSP;
+			op_size			   = 0;
+			cs			   = 0;
+			cet			   = 0;
+			rex			   = 0;
+			break;
+		}
+		case X86_OP_PUSH_RBP: { // PUSH r64 (Push r64)
+			dputf(DST_STD(), "PUSH_RBP\n");
+			if (rex || op_size || cs || cet) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_PUSH;
+			instruction->d		   = REG_RBP;
+			op_size			   = 0;
+			cs			   = 0;
+			cet			   = 0;
+			rex			   = 0;
+			break;
+		}
+		case X86_OP_PUSH_RAX: { // PUSH r64 (Push r64)
+			dputf(DST_STD(), "PUSH_RAX\n");
+			if (rex || op_size || cs || cet) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_PUSH;
+			instruction->d		   = REG_RAX;
+			op_size			   = 0;
+			cs			   = 0;
+			cet			   = 0;
+			rex			   = 0;
+			break;
+		}
+		case X86_OP_POP_RBP: { // POP r64 (Pop top of stack into r64; increment stack pointer. Cannot encode 32-bit
+			// operand size.)
+			dputf(DST_STD(), "POP_RBP\n");
+			if (rex || op_size || cs || cet) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_POP;
+			instruction->d		   = REG_RBP;
+			op_size			   = 0;
+			cs			   = 0;
+			cet			   = 0;
+			rex			   = 0;
+			break;
+		}
+		case X86_OP_POP_RSI: { // POP r64 (Pop top of stack into r64; increment stack pointer. Cannot encode 32-bit
+			// operand size.)
+			dputf(DST_STD(), "POP_RSI\n");
+			if (rex || op_size || cs || cet) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_POP;
+			instruction->d		   = REG_RSI;
+			op_size			   = 0;
+			cs			   = 0;
+			cet			   = 0;
+			rex			   = 0;
+			break;
+		}
+		case X86_OP_JE: { // JE rel8 (Jump short if equal (ZF=1))
+			dputf(DST_STD(), "JE [RIP + disp8]\n");
+			if (rex || op_size || cs || cet) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_JE;
+			instruction->addr	   = *off;
+			read_val(bin, &instruction->d, 1, off);
+			op_size = 0;
+			cs	= 0;
+			cet	= 0;
+			rex	= 0;
+			break;
+		}
+		case X86_OP_JNE: { // JNE rel8 (Jump short if not equal (ZF=0))
+			dputf(DST_STD(), "JNE [RIP + disp8]\n");
+			if (rex || op_size || cs || cet) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_JNE;
+			read_val(bin, &instruction->d, 1, off);
+			op_size = 0;
+			cs	= 0;
+			cet	= 0;
+			rex	= 0;
+			break;
+		}
+		case X86_OP_RET: { // RET (Near return to calling procedure.)
+			dputf(DST_STD(), "RET\n");
+			if (rex || op_size || cs || cet) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
+			instruction_t *instruction = arr_add(instructions, NULL);
+			instruction->opcode	   = OP_RET;
+			op_size			   = 0;
+			cs			   = 0;
+			cet			   = 0;
+			rex			   = 0;
+			break;
+		}
 		case X86_OP_SAR1: { // SAR r/m64, 1 (Signed divide r/m64 by 2, once.)
 			dputf(DST_STD(), "SAR1\n");
 			if (!rex) {
@@ -1141,74 +1453,32 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			rex	= 0;
 			break;
 		}
-		case X86_OP_PUSH_RSP: { // PUSH r64 (Push r64)
-			dputf(DST_STD(), "PUSH_RSP\n");
+		case X86_OP_CALL: { // CALL rel32 (Near return to calling procedure)
+			dputf(DST_STD(), "CALL [RIP + disp32]\n");
 			if (rex || op_size || cs || cet) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
 			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_PUSH;
-			instruction->d		   = REG_RSP;
-			op_size			   = 0;
-			cs			   = 0;
-			cet			   = 0;
-			rex			   = 0;
-			break;
-		}
-		case X86_OP_PUSH_RAX: { // PUSH r64 (Push r64)
-			dputf(DST_STD(), "PUSH_RAX\n");
-			if (rex || op_size || cs || cet) {
-				log_error("reverse", "main", NULL, "prefix was not expected");
-			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_PUSH;
-			instruction->d		   = REG_RAX;
-			op_size			   = 0;
-			cs			   = 0;
-			cet			   = 0;
-			rex			   = 0;
-			break;
-		}
-		case X86_OP_POP_RSI: { // POP r64 (Pop top of stack into r64; increment stack pointer. Cannot encode 32-bit
-			// operand size.)
-			dputf(DST_STD(), "POP_RSI\n");
-			if (rex || op_size || cs || cet) {
-				log_error("reverse", "main", NULL, "prefix was not expected");
-			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_POP;
-			instruction->d		   = REG_RSI;
-			op_size			   = 0;
-			cs			   = 0;
-			cet			   = 0;
-			rex			   = 0;
-			break;
-		}
-		case X86_OP_JE: { // JE rel8 (Jump short if equal (ZF=1))
-			dputf(DST_STD(), "JE [rel8]\n");
-			if (rex || op_size || cs || cet) {
-				log_error("reverse", "main", NULL, "prefix was not expected");
-			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_JE;
-			read_val(bin, &instruction->d, 1, off);
+			instruction->opcode	   = OP_CALL_REL;
+			read_val(bin, &instruction->d, 4, off);
 			op_size = 0;
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
 			break;
 		}
-		case X86_OP_RET: { // RET (Near return to calling procedure.)
-			dputf(DST_STD(), "RET\n");
+		case X86_OP_JMP: { // JMP rel32 (Jump near, relative, RIP = RIP + 32-bit displacement sign extended to 64-bits.)
+			dputf(DST_STD(), "JMP [RIP + disp32]\n");
 			if (rex || op_size || cs || cet) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
 			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_RET;
-			op_size			   = 0;
-			cs			   = 0;
-			cet			   = 0;
-			rex			   = 0;
+			instruction->opcode	   = OP_JMP_IMM;
+			read_val(bin, &instruction->d, 4, off);
+			op_size = 0;
+			cs	= 0;
+			cet	= 0;
+			rex	= 0;
 			break;
 		}
 		case X86_OP_HLT: { // HLT (Halt)
@@ -1240,7 +1510,7 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				case 0x2: { // CALL r/m64 (Call near, absolute indirect, address given in r/m64.)
 					dputf(DST_STD(), "CALL ");
 					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_CALL;
+					instruction->opcode	   = OP_CALL_RIP;
 					byte rm			   = bits(b, 0, 0x7);
 					switch (rm) {
 					case 0x5: {
@@ -1268,11 +1538,18 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			}
 			case 0x3: {
 				switch (reg) {
+				case 0x2: { // CALL r/m64 (Call near, absolute indirect, address given in r/m64)
+					dputf(DST_STD(), "CALL [REG64]\n");
+					instruction_t *instruction = arr_add(instructions, NULL);
+					instruction->opcode	   = OP_CALL_REG;
+					instruction->d		   = read_reg64(bits(b, 0, 0x7));
+					break;
+				}
 				case 0x4: { // JMP r/m64 (Jump near, absolute indirect, RIP = 64-Bit offset from register or
 					    // memory.)
 					dputf(DST_STD(), "JMP [REG64]\n");
 					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_JMP;
+					instruction->opcode	   = OP_JMP_REG;
 					instruction->d		   = read_reg64(bits(b, 0, 0x7));
 					break;
 				}
@@ -1317,6 +1594,9 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 		}
 		case X86_PREFIX_EXT: { // Extended opcode prefix
 			dputf(DST_STD(), "+EXT\n");
+			if (rex) {
+				log_error("reverse", "main", NULL, "REX prefix was not expected");
+			}
 			read_byte(bin, &b, off);
 			switch (b) {
 			case X86_EXT_SYSCALL: {
@@ -1356,18 +1636,35 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				read_byte(bin, &b, off);
 				byte mod = bits(b, 6, 0x3);
 				switch (mod) {
+				case 0x0: {
+					byte reg = bits(b, 3, 0x7);
+					switch (reg) {
+					case 0x0: {
+						dputf(DST_STD(), "[REG64]\n");
+						instruction_t *instruction = arr_add(instructions, NULL);
+						instruction->opcode	   = OP_NOP;
+						instruction->d		   = read_reg64(bits(b, 0, 0x7));
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown reg: %02X", reg);
+						break;
+					}
+					}
+					break;
+				}
 				case 0x01: {
 					instruction_t *instruction = arr_add(instructions, NULL);
 					instruction->opcode	   = OP_NOP8;
 					instruction->d		   = read_reg64(bits(b, 3, 0x7));
 					int sib			   = bits(b, 0, 0x7) == 0x4;
 					if (sib) {
-						dputf(DST_STD(), "[REG + REG + disp8]\n");
+						dputf(DST_STD(), "[REG64 + REG64 + disp8]\n");
 						read_byte(bin, &b, off);
 						dputf(DST_STD(), "SIB\n");
 						instruction->sib = b;
 					} else {
-						dputf(DST_STD(), "[REG + disp8]\n");
+						dputf(DST_STD(), "[REG64 + disp8]\n");
 					}
 
 					read_val(bin, &instruction->s, 1, off);
@@ -1379,12 +1676,12 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 					instruction->d		   = read_reg64(bits(b, 3, 0x7));
 					int sib			   = bits(b, 0, 0x7) == 0x4;
 					if (sib) {
-						dputf(DST_STD(), "[REG + REG + disp32]\n");
+						dputf(DST_STD(), "[REG64 + REG64 + disp32]\n");
 						read_byte(bin, &b, off);
 						dputf(DST_STD(), "SIB\n");
 						instruction->sib = b;
 					} else {
-						dputf(DST_STD(), "[REG + disp32]\n");
+						dputf(DST_STD(), "[REG64 + disp32]\n");
 					}
 
 					read_val(bin, &instruction->s, 4, off);
@@ -1414,9 +1711,10 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 					log_error("reverse", "main", NULL, "prefix was not expected");
 				}
 
-				rex_w = bit_is_set(b, 3); // REX.W (64 Bit Operand Size)
-				rex_b = bit_is_set(b, 0); // REX.B (Extension of the ModR/M r/m field, SIB base field, or Opcode reg field)
-				dputf(DST_STD(), "+REX.%s%s\n", rex_w ? "W" : "", rex_b ? "B" : "");
+				rex_w = bits(b, 3, 0x1); // REX.W (64 Bit Operand Size)
+				rex_r = bits(b, 2, 0x1); // REX.R (Extension of the ModR/M reg field)
+				rex_b = bits(b, 0, 0x1); // REX.B (Extension of the ModR/M r/m field, SIB base field, or Opcode reg field)
+				dputf(DST_STD(), "+REX.%s%s%s\n", rex_w ? "W" : "", rex_r ? "R" : "", rex_b ? "B" : "");
 				op_size = 0;
 				cs	= 0;
 				cet	= 0;
@@ -1432,67 +1730,7 @@ static int read_text_section(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 	return 0;
 }
 
-static int print_reg(reg_t reg)
-{
-	switch (reg) {
-	case REG_ECX: {
-		dputf(DST_STD(), "ECX");
-		break;
-	}
-	case REG_EBP: {
-		dputf(DST_STD(), "EBP");
-		break;
-	}
-	case REG_RAX: {
-		dputf(DST_STD(), "RAX");
-		break;
-	}
-	case REG_RCX: {
-		dputf(DST_STD(), "RCX");
-		break;
-	}
-	case REG_RDX: {
-		dputf(DST_STD(), "RDX");
-		break;
-	}
-	case REG_RSP: {
-		dputf(DST_STD(), "RSP");
-		break;
-	}
-	case REG_RSI: {
-		dputf(DST_STD(), "RSI");
-		break;
-	}
-	case REG_RDI: {
-		dputf(DST_STD(), "RDI");
-		break;
-	}
-	case REG_R9: {
-		dputf(DST_STD(), "R9");
-		break;
-	}
-	default: {
-		log_error("reverse", "main", NULL, "unknown register: %02X", reg);
-		break;
-	}
-	}
-
-	return 0;
-}
-
-static int print_val8(u8 val)
-{
-	dputf(DST_STD(), "0x%02X", val);
-	return 0;
-}
-
-static int print_val32(u32 val)
-{
-	dputf(DST_STD(), "0x%08X", val);
-	return 0;
-}
-
-static int read_elf_header(bin_t *bin, size_t *off)
+static int read_elf_header(bin_t *bin, size_t *off, arr_t *instructions)
 {
 	dputf(DST_STD(), "[ELF IDENT]\n");
 	schema_t elf_ident_schema = {0};
@@ -1532,187 +1770,51 @@ static int read_elf_header(bin_t *bin, size_t *off)
 	row_foreach(&sh_tbl, i, row)
 	{
 		const size_t *name_off = schema_get_val(&sh_tbl.schema, SECTION_HEADER_NAME, row);
+		const u32 *type	       = schema_get_val(&sh_tbl.schema, SECTION_HEADER_TYPE, row);
 		const u64 *offset      = schema_get_val(&sh_tbl.schema, SECTION_HEADER_OFFSET, row);
 		const u64 *size	       = schema_get_val(&sh_tbl.schema, SECTION_HEADER_SIZE, row);
 
 		strv_t name = strvbuf_get(&sh_tbl.strs, *name_off);
-		if (strv_eq(name, STRV(".text"))) {
-			u64 tmp		   = *offset;
-			arr_t instructions = {0};
-			arr_init(&instructions, 16, sizeof(instruction_t), ALLOC_STD);
-			read_text_section(bin, *size, *data, &instructions, &tmp);
-			dputf(DST_STD(), "[instructions]\n");
-			uint i = 0;
-			instruction_t *instruction;
-			arr_foreach(&instructions, i, instruction)
-			{
-				switch (instruction->opcode) {
-				case OP_NOP8: {
-					dputf(DST_STD(), "NOP ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " ");
-					print_val8(instruction->s);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_NOP32: {
-					dputf(DST_STD(), "NOP ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " ");
-					print_val32(instruction->s);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_SYSCALL: {
-					dputf(DST_STD(), "syscall\n");
-					break;
-				}
-				case OP_ENDBR64: {
-					dputf(DST_STD(), "endbr64\n");
-					break;
-				}
-				case OP_ADD: {
-					dputf(DST_STD(), "ADD ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " ");
-					print_reg(instruction->s);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_SUB: {
-					dputf(DST_STD(), "SUB ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " ");
-					print_reg(instruction->s);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_XOR: {
-					dputf(DST_STD(), "XOR ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " ");
-					print_reg(instruction->s);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_CMP: {
-					dputf(DST_STD(), "CMP ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " ");
-					print_reg(instruction->s);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_PUSH: {
-					dputf(DST_STD(), "PUSH ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_POP: {
-					dputf(DST_STD(), "POP ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_JE: {
-					dputf(DST_STD(), "JE ");
-					print_val8(instruction->d);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_AND: {
-					dputf(DST_STD(), "AND ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " ");
-					print_val8(instruction->s);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_TEST: {
-					dputf(DST_STD(), "TEST ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " ");
-					print_reg(instruction->s);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_MOV_REG: {
-					dputf(DST_STD(), "MOV ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " ");
-					print_reg(instruction->s);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_MOV_RIP: {
-					dputf(DST_STD(), "MOV ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " [RIP+");
-					print_val32(instruction->s);
-					dputf(DST_STD(), "]\n");
-					break;
-				}
-				case OP_MOV_IMM: {
-					dputf(DST_STD(), "MOV ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " ");
-					print_val32(instruction->s);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_LEA: {
-					dputf(DST_STD(), "LEA ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " [RIP+");
-					print_val32(instruction->s);
-					dputf(DST_STD(), "]\n");
-					break;
-				}
-				case OP_SHR: {
-					dputf(DST_STD(), "SHR ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " ");
-					print_val8(instruction->s);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_SAR: {
-					dputf(DST_STD(), "SAR ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), " ");
-					print_val8(instruction->s);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				case OP_RET: {
-					dputf(DST_STD(), "RET\n");
-					break;
-				}
-				case OP_HLT: {
-					dputf(DST_STD(), "HLT\n");
-					break;
-				}
-				case OP_CALL: {
-					dputf(DST_STD(), "CALL [RIP+");
-					print_val32(instruction->d);
-					dputf(DST_STD(), "]\n");
-					break;
-				}
-				case OP_JMP: {
-					dputf(DST_STD(), "JMP ");
-					print_reg(instruction->d);
-					dputf(DST_STD(), "\n");
-					break;
-				}
-				default: {
-					log_error("reverse", "main", NULL, "unknown opcode: %02X", instruction->opcode);
-					break;
-				}
-				}
-			}
+		u64 tmp	    = *offset;
 
-			arr_free(&instructions);
+		if (*type == SECTION_HEADER_TYPE_PROGBITS) {
+			if (strv_eq(name, STRV(".init"))) {
+				dputf(DST_STD(), "[.init]\n");
+				instruction_t *instruction = arr_add(instructions, NULL);
+				instruction->opcode	   = OP_SECTION;
+				instruction->str	   = ".init";
+				instruction		   = arr_add(instructions, NULL);
+				instruction->opcode	   = OP_GLOBAL;
+				instruction->str	   = "_init";
+				instruction		   = arr_add(instructions, NULL);
+				instruction->opcode	   = OP_LABEL;
+				instruction->str	   = "_init";
+				read_program_data(bin, *size, *data, instructions, &tmp);
+			} else if (strv_eq(name, STRV(".text"))) {
+				dputf(DST_STD(), "[.text]\n");
+				instruction_t *instruction = arr_add(instructions, NULL);
+				instruction->opcode	   = OP_SECTION;
+				instruction->str	   = ".text";
+				instruction		   = arr_add(instructions, NULL);
+				instruction->opcode	   = OP_GLOBAL;
+				instruction->str	   = "_start";
+				instruction		   = arr_add(instructions, NULL);
+				instruction->opcode	   = OP_LABEL;
+				instruction->str	   = "_start";
+				read_program_data(bin, *size, *data, instructions, &tmp);
+			} else if (strv_eq(name, STRV(".fini"))) {
+				dputf(DST_STD(), "[.fini]\n");
+				instruction_t *instruction = arr_add(instructions, NULL);
+				instruction->opcode	   = OP_SECTION;
+				instruction->str	   = ".fini";
+				instruction		   = arr_add(instructions, NULL);
+				instruction->opcode	   = OP_GLOBAL;
+				instruction->str	   = "_fini";
+				instruction		   = arr_add(instructions, NULL);
+				instruction->opcode	   = OP_LABEL;
+				instruction->str	   = "_fini";
+				read_program_data(bin, *size, *data, instructions, &tmp);
+			}
 		}
 	}
 
@@ -1726,7 +1828,7 @@ static int read_elf_header(bin_t *bin, size_t *off)
 	return 0;
 }
 
-static int file(fs_t *fs, strv_t path)
+static int file(fs_t *fs, strv_t path, arr_t *instructions)
 {
 	int ret = 0;
 
@@ -1739,13 +1841,104 @@ static int file(fs_t *fs, strv_t path)
 	if (bin_cmp(&file, 0, magic, sizeof(magic)) == 0) {
 		log_info("reverse", "main", NULL, "Format: Executable and Linkable Format");
 		size_t off = 4;
-		ret |= read_elf_header(&file, &off);
+		ret |= read_elf_header(&file, &off, instructions);
 	} else {
 		log_info("reverse", "main", NULL, "Format: Unknown");
 	}
 
 	bin_free(&file);
 	return ret;
+}
+
+static int print_reg(reg_t reg)
+{
+	switch (reg) {
+	case REG_EAX: {
+		dputf(DST_STD(), "EAX");
+		break;
+	}
+	case REG_ECX: {
+		dputf(DST_STD(), "ECX");
+		break;
+	}
+	case REG_EBP: {
+		dputf(DST_STD(), "EBP");
+		break;
+	}
+	case REG_RAX: {
+		dputf(DST_STD(), "RAX");
+		break;
+	}
+	case REG_RCX: {
+		dputf(DST_STD(), "RCX");
+		break;
+	}
+	case REG_RDX: {
+		dputf(DST_STD(), "RDX");
+		break;
+	}
+	case REG_RSP: {
+		dputf(DST_STD(), "RSP");
+		break;
+	}
+	case REG_RBP: {
+		dputf(DST_STD(), "RBP");
+		break;
+	}
+	case REG_RSI: {
+		dputf(DST_STD(), "RSI");
+		break;
+	}
+	case REG_RDI: {
+		dputf(DST_STD(), "RDI");
+		break;
+	}
+	case REG_R8: {
+		dputf(DST_STD(), "R8");
+		break;
+	}
+	case REG_R9: {
+		dputf(DST_STD(), "R9");
+		break;
+	}
+	default: {
+		log_error("reverse", "main", NULL, "unknown register: %02X", reg);
+		break;
+	}
+	}
+
+	return 0;
+}
+
+static int print_val8(u8 val)
+{
+	dputf(DST_STD(), "0x%02X", val);
+	return 0;
+}
+
+static int print_val32(u32 val)
+{
+	dputf(DST_STD(), "0x%08X", val);
+	return 0;
+}
+
+static const char *reg_src(reg_t reg)
+{
+	switch (reg) {
+	case REG_EAX: return "eax";
+	case REG_ECX: return "ecx";
+	case REG_EBP: return "ebp";
+	case REG_RAX: return "rax";
+	case REG_RDX: return "rdx";
+	case REG_RSP: return "rsp";
+	case REG_RBP: return "rbp";
+	case REG_RSI: return "rsi";
+	case REG_RDI: return "rdi";
+	case REG_R8: return "r8d";
+	case REG_R9: return "r9";
+	default: break;
+	}
+	return NULL;
 }
 
 int main(int argc, const char **argv)
@@ -1775,7 +1968,403 @@ int main(int argc, const char **argv)
 	fs_init(&fs, 0, 0, ALLOC_STD);
 
 	if (fs_isfile(&fs, path)) {
-		file(&fs, path);
+		arr_t instructions = {0};
+		arr_init(&instructions, 16, sizeof(instruction_t), ALLOC_STD);
+
+		file(&fs, path, &instructions);
+
+		dputf(DST_STD(), "[instructions]\n");
+		uint i = 0;
+		instruction_t *instruction;
+		arr_foreach(&instructions, i, instruction)
+		{
+			switch (instruction->opcode) {
+			case OP_SECTION: {
+				dputf(DST_STD(), ".section %s\n", instruction->str);
+				break;
+			}
+			case OP_GLOBAL: {
+				dputf(DST_STD(), ".global %s\n", instruction->str);
+				break;
+			}
+			case OP_LABEL: {
+				dputf(DST_STD(), "%s:\n", instruction->str);
+				break;
+			}
+			case OP_NOP: {
+				dputf(DST_STD(), "NOP ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_NOP8: {
+				dputf(DST_STD(), "NOP ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_val8(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_NOP32: {
+				dputf(DST_STD(), "NOP ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_val32(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_SYSCALL: {
+				dputf(DST_STD(), "syscall\n");
+				break;
+			}
+			case OP_ENDBR64: {
+				dputf(DST_STD(), "endbr64\n");
+				break;
+			}
+			case OP_ADD_REG: {
+				dputf(DST_STD(), "ADD ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_reg(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_ADD_IMM: {
+				dputf(DST_STD(), "ADD ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_val8(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_SUB_REG: {
+				dputf(DST_STD(), "SUB ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_reg(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_SUB_IMM: {
+				dputf(DST_STD(), "SUB ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_val8(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_XOR: {
+				dputf(DST_STD(), "XOR ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_reg(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_CMP: {
+				dputf(DST_STD(), "CMP ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_reg(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_CMP_IMM: {
+				dputf(DST_STD(), "CMP [RIP+");
+				print_val32(instruction->d);
+				dputf(DST_STD(), "] ");
+				print_val8(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_PUSH: {
+				dputf(DST_STD(), "PUSH ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_POP: {
+				dputf(DST_STD(), "POP ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_JE: {
+				dputf(DST_STD(), "JE ");
+				print_val8(instruction->d);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_JNE: {
+				dputf(DST_STD(), "JNE ");
+				print_val8(instruction->d);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_AND: {
+				dputf(DST_STD(), "AND ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_val8(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_TEST: {
+				dputf(DST_STD(), "TEST ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_reg(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_MOV_REG: {
+				dputf(DST_STD(), "MOV ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_reg(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_MOV_RIP: {
+				dputf(DST_STD(), "MOV ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " [RIP+");
+				print_val32(instruction->s);
+				dputf(DST_STD(), "]\n");
+				break;
+			}
+			case OP_MOV_IMM8: {
+				dputf(DST_STD(), "MOV ");
+				dputf(DST_STD(), " [RIP+");
+				print_val32(instruction->d);
+				dputf(DST_STD(), "] ");
+				print_val8(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_MOV_IMM: {
+				dputf(DST_STD(), "MOV ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_val32(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_LEA: {
+				dputf(DST_STD(), "LEA ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " [RIP+");
+				print_val32(instruction->s);
+				dputf(DST_STD(), "]\n");
+				break;
+			}
+			case OP_SHR: {
+				dputf(DST_STD(), "SHR ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_val8(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_SAR: {
+				dputf(DST_STD(), "SAR ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), " ");
+				print_val8(instruction->s);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_RET: {
+				dputf(DST_STD(), "RET\n");
+				break;
+			}
+			case OP_HLT: {
+				dputf(DST_STD(), "HLT\n");
+				break;
+			}
+			case OP_CALL_REG: {
+				dputf(DST_STD(), "CALL ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_CALL_RIP: {
+				dputf(DST_STD(), "CALL [RIP+");
+				print_val32(instruction->d);
+				dputf(DST_STD(), "]\n");
+				break;
+			}
+			case OP_CALL_REL: {
+				dputf(DST_STD(), "CALL .+");
+				print_val32(instruction->d);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_JMP_REG: {
+				dputf(DST_STD(), "JMP ");
+				print_reg(instruction->d);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			case OP_JMP_IMM: {
+				dputf(DST_STD(), "JMP ");
+				print_val32(instruction->d);
+				dputf(DST_STD(), "\n");
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown opcode: %02X", instruction->opcode);
+				break;
+			}
+			}
+		}
+
+		if (!fs_isdir(&fs, STRV("out"))) {
+			fs_mkdir(&fs, STRV("out"));
+		}
+
+		void *src;
+		fs_open(&fs, STRV("out/main.c"), "w", &src);
+		dst_t dst = DST_FS(&fs, src);
+
+		dputf(dst, "__asm__(\n");
+		i = 0;
+		arr_foreach(&instructions, i, instruction)
+		{
+			dputf(dst, "\t\"");
+			switch (instruction->opcode) {
+			case OP_SECTION: {
+				dputf(dst, ".section %s", instruction->str);
+				break;
+			}
+			case OP_GLOBAL: {
+				dputf(dst, ".global %s", instruction->str);
+				break;
+			}
+			case OP_LABEL: {
+				dputf(dst, "%s:", instruction->str);
+				break;
+			}
+			case OP_SYSCALL: {
+				dputf(dst, "syscall");
+				break;
+			}
+			case OP_ENDBR64: {
+				dputf(dst, "endbr64");
+				break;
+			}
+			case OP_ADD_IMM: {
+				dputf(dst, "add $0x%x, %%%s", instruction->s, reg_src(instruction->d));
+				break;
+			}
+			case OP_SUB_IMM: {
+				dputf(dst, "sub $0x%x, %%%s", instruction->s, reg_src(instruction->d));
+				break;
+			}
+			case OP_XOR: {
+				dputf(dst, "xor %%%s, %%%s", reg_src(instruction->s), reg_src(instruction->d));
+				break;
+			}
+			case OP_PUSH: {
+				dputf(dst, "push %%%s", reg_src(instruction->d));
+				break;
+			}
+			case OP_POP: {
+				dputf(dst, "pop %%%s", reg_src(instruction->d));
+				break;
+			}
+			case OP_JE: {
+				dputf(dst, "je .+0x%x", 2 + instruction->d);
+				break;
+			}
+			case OP_AND: {
+				dputf(dst, "and $%d, %%%s", (s8)instruction->s, reg_src(instruction->d));
+				break;
+			}
+			case OP_TEST: {
+				dputf(dst, "test %%%s, %%%s", reg_src(instruction->s), reg_src(instruction->d));
+				break;
+			}
+			case OP_MOV_REG: {
+				dputf(dst, "mov %%%s, %%%s", reg_src(instruction->s), reg_src(instruction->d));
+				break;
+			}
+			case OP_MOV_RIP: {
+				dputf(dst, "mov 0x%x(%%rip), %%%s", instruction->s, reg_src(instruction->d));
+				break;
+			}
+			case OP_MOV_IMM: {
+				dputf(dst, "mov $%d, %%%s", instruction->s, reg_src(instruction->d));
+				break;
+			}
+			case OP_LEA: {
+				dputf(dst, "lea 0x%x(%%rip), %%%s", instruction->s, reg_src(instruction->d));
+				break;
+			}
+			case OP_RET: {
+				dputf(dst, "ret");
+				break;
+			}
+			case OP_CALL_REG: {
+				dputf(dst, "call *%%%s", reg_src(instruction->d));
+				break;
+			}
+			case OP_CALL_RIP: {
+				dputf(dst, "call 0x%x(%%rip)", instruction->d);
+				break;
+			}
+			case OP_CALL_REL: {
+				dputf(dst, "call .+%d", (s32)instruction->d);
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unsupported op: %d", instruction->opcode);
+				break;
+			}
+			}
+			dputf(dst, "\\n\"\n");
+		}
+
+		dputf(dst, ");\n");
+		fs_close(&fs, src);
+
+		void *linker;
+		fs_open(&fs, STRV("out/linker.ld"), "w", &linker);
+		dst = DST_FS(&fs, linker);
+		dputf(dst,
+		      "SECTIONS\n"
+		      "{\n"
+		      "\t. = 0x400000;\n"
+		      "\n"
+		      "\t.text : {\n"
+		      "\t\t*(.text*)\n"
+		      "\t}\n"
+		      "\n"
+		      "\t.init : {\n"
+		      "\t\t__init_start = .;\n"
+		      "\t\t*(.init)\n"
+		      "\t\t__init_end = .;\n"
+		      "\t}\n"
+		      "\n"
+		      "\t.fini : {\n"
+		      "\t\t__fini_start = .;\n"
+		      "\t\t*(.fini)\n"
+		      "\t\t__fini_end = .;\n"
+		      "\t}\n"
+		      "}\n");
+
+		fs_close(&fs, src);
+
+		proc_t proc = {0};
+		proc_init(&proc, 0, 0);
+		// if (proc_cmd(&proc, STRV("gcc -nostdlib -static -Wl,-Tout/linker.ld out/main.c -o out/main")) == 0) {
+		if (proc_cmd(&proc, STRV("gcc -nostdlib out/main.c -o out/main")) == 0) {
+			proc_cmd(&proc, STRV("objdump -wd out/main"));
+			proc_cmd(&proc, STRV("./out/main"));
+		}
+		proc_free(&proc);
+
+		arr_free(&instructions);
 	} else {
 		log_error("reverse", "main", NULL, "File does not exist: %.*s", (int)path.len, path.data);
 		ret = 1;
