@@ -1,7 +1,5 @@
-#include "alloc.h"
 #include "args.h"
-#include "arr.h"
-#include "dst.h"
+#include "asmc.h"
 #include "fs.h"
 #include "log.h"
 #include "mem.h"
@@ -77,7 +75,7 @@ typedef enum section_header_type_e {
 	SECTION_HEADER_TYPE_NOBITS,
 	SECTION_HEADER_TYPE_REL,
 	SECTION_HEADER_TYPE_SHLIB,
-	SECTION_HEADER_TYPE_DYNSYYM,
+	SECTION_HEADER_TYPE_DYNSYM,
 	SECTION_HEADER_TYPE_UNKNOWN_0,
 	SECTION_HEADER_TYPE_UNKNOWN_1,
 	SECTION_HEADER_TYPE_INIT_ARRAY,
@@ -398,14 +396,14 @@ static void *read_section_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 		{SECTION_HEADER_TYPE_PROGBITS, STRVT("Program data")},
 		{SECTION_HEADER_TYPE_SYMTAB, STRVT("Symbol table")},
 		{SECTION_HEADER_TYPE_STRTAB, STRVT("String table")},
-		{SECTION_HEADER_TYPE_RELA, STRVT("Relocation")},
+		{SECTION_HEADER_TYPE_RELA, STRVT("Relocations (+A)")},
 		{SECTION_HEADER_TYPE_HASH, STRVT("Hash")},
 		{SECTION_HEADER_TYPE_DYNAMIC, STRVT("Dynamic")},
 		{SECTION_HEADER_TYPE_NOTE, STRVT("Notes")},
 		{SECTION_HEADER_TYPE_NOBITS, STRVT("bss")},
-		{SECTION_HEADER_TYPE_REL, STRVT("Relocation")},
+		{SECTION_HEADER_TYPE_REL, STRVT("Relocations (-A)")},
 		{SECTION_HEADER_TYPE_SHLIB, STRVT("Shared library")},
-		{SECTION_HEADER_TYPE_DYNSYYM, STRVT("Dynamic linker symbol")},
+		{SECTION_HEADER_TYPE_DYNSYM, STRVT("Dynamic linker symbol")},
 		{SECTION_HEADER_TYPE_INIT_ARRAY, STRVT("Constructors")},
 		{SECTION_HEADER_TYPE_FINI_ARRAY, STRVT("Destructors")},
 		{SECTION_HEADER_TYPE_GNU_HASH, STRVT("GNU_HASH")},
@@ -513,96 +511,42 @@ static void *read_section_header(bin_t *bin, u8 class, u16 num, u64 off, u16 siz
 #define bit_is_set(data, bit) ((data) & (1 << (bit)))
 #define bits(data, off, mask) (((data) >> (off)) & (mask))
 
-typedef enum opcode_e {
-	OP_UNKNOWN,
-	OP_SECTION,
-	OP_GLOBAL,
-	OP_LABEL,
-	OP_NOP,
-	OP_NOP8,
-	OP_NOP32,
-	OP_SYSCALL,
-	OP_ENDBR64,
-	OP_ADD_REG,
-	OP_ADD_IMM,
-	OP_SUB_REG,
-	OP_SUB_IMM,
-	OP_XOR,
-	OP_CMP,
-	OP_CMP_IMM,
-	OP_PUSH,
-	OP_POP,
-	OP_JE,
-	OP_JNE,
-	OP_AND,
-	OP_TEST,
-	OP_MOV_REG,
-	OP_MOV_RIP,
-	OP_MOV_IMM8,
-	OP_MOV_IMM,
-	OP_LEA,
-	OP_SHR,
-	OP_SAR,
-	OP_RET,
-	OP_HLT,
-	OP_CALL_REG,
-	OP_CALL_RIP,
-	OP_CALL_REL,
-	OP_JMP_REG,
-	OP_JMP_IMM,
-} opcode_t;
-
-typedef enum reg_e {
-	REG_UNKNOWN,
-	REG_EAX,
-	REG_ECX,
-	REG_EBP,
-	REG_RAX,
-	REG_RCX,
-	REG_RDX,
-	REG_RSP,
-	REG_RBP,
-	REG_RSI,
-	REG_RDI,
-	REG_R8,
-	REG_R9,
-} reg_t;
-
 enum {
 	X86_PREFIX_OP_SIZE = 0x66,
 	X86_PREFIX_CS	   = 0x2E,
+	X86_PREFIX_REP	   = 0xF2,
 	X86_PREFIX_CET	   = 0xF3,
 	X86_PREFIX_EXT	   = 0x0F,
 };
 
 enum {
-	X86_OP_ADD	= 0x01,
-	X86_OP_SUB	= 0x29,
-	X86_OP_XOR	= 0x31,
-	X86_OP_CMP	= 0x39,
-	X86_OP_PUSH_RAX = 0x50,
-	X86_OP_PUSH_RSP = 0x54,
-	X86_OP_PUSH_RBP = 0x55,
-	X86_OP_POP_RBP	= 0x5D,
-	X86_OP_POP_RSI	= 0x5E,
-	X86_OP_JE	= 0x74,
-	X86_OP_JNE	= 0x75,
-	X86_OP_CMP_IMM	= 0x80,
-	X86_OP_ALU	= 0x83,
-	X86_OP_TEST	= 0x85,
-	X86_OP_MOV_REG	= 0x89,
-	X86_OP_MOV_RIP	= 0x8B,
-	X86_OP_LEA	= 0x8D,
-	X86_OP_MOV_EAX	= 0xB8,
-	X86_OP_SHR_SAR	= 0xC1,
-	X86_OP_RET	= 0xC3,
-	X86_OP_MOV_IMM8 = 0xC6,
-	X86_OP_MOV_IMM	= 0xC7,
-	X86_OP_SAR1	= 0xD1,
-	X86_OP_CALL	= 0xE8,
-	X86_OP_JMP	= 0xE9,
-	X86_OP_HLT	= 0xF4,
-	X86_OP_JMP_CALL = 0xFF,
+	X86_OP_ADD	     = 0x01,
+	X86_OP_SUB	     = 0x29,
+	X86_OP_XOR	     = 0x31,
+	X86_OP_CMP	     = 0x39,
+	X86_OP_PUSH_RAX	     = 0x50,
+	X86_OP_PUSH_RSP	     = 0x54,
+	X86_OP_PUSH_RBP	     = 0x55,
+	X86_OP_POP_RBP	     = 0x5D,
+	X86_OP_POP_RSI	     = 0x5E,
+	X86_OP_JE	     = 0x74,
+	X86_OP_JNE	     = 0x75,
+	X86_OP_CMP_IMM	     = 0x80,
+	X86_OP_ALU	     = 0x83,
+	X86_OP_TEST	     = 0x85,
+	X86_OP_MOV_REG	     = 0x89,
+	X86_OP_MOV_RIP	     = 0x8B,
+	X86_OP_LEA	     = 0x8D,
+	X86_OP_MOV_EAX	     = 0xB8,
+	X86_OP_SHR_SAR	     = 0xC1,
+	X86_OP_RET	     = 0xC3,
+	X86_OP_MOV_IMM8	     = 0xC6,
+	X86_OP_MOV_IMM	     = 0xC7,
+	X86_OP_SAR1	     = 0xD1,
+	X86_OP_CALL	     = 0xE8,
+	X86_OP_JMP	     = 0xE9,
+	X86_OP_HLT	     = 0xF4,
+	X86_OP_JMP_CALL_PUSH = 0xFF,
 };
 
 enum {
@@ -616,6 +560,7 @@ enum {
 };
 
 enum {
+	X86_REG_EAX = 0x0,
 	X86_REG_ECX = 0x1,
 	X86_REG_EBP = 0x5,
 };
@@ -632,38 +577,30 @@ enum {
 	X86_REG_R9  = 0x9,
 };
 
-typedef struct instruction_s {
-	opcode_t opcode;
-	u64 d;
-	u64 s;
-	u8 sib;
-	const char *str;
-	u64 addr;
-} instruction_t;
-
-static reg_t read_reg64(u8 address)
+static asmc_reg_type_t read_reg64(u8 address)
 {
 	switch (address) {
-	case X86_REG_RAX: return REG_RAX;
-	case X86_REG_RCX: return REG_RCX;
-	case X86_REG_RDX: return REG_RDX;
-	case X86_REG_RSP: return REG_RSP;
-	case X86_REG_RBP: return REG_RBP;
-	case X86_REG_RSI: return REG_RSI;
-	case X86_REG_RDI: return REG_RDI;
-	case X86_REG_R8: return REG_R8;
-	case X86_REG_R9: return REG_R9;
+	case X86_REG_RAX: return ASMC_REG_RAX;
+	case X86_REG_RCX: return ASMC_REG_RCX;
+	case X86_REG_RDX: return ASMC_REG_RDX;
+	case X86_REG_RSP: return ASMC_REG_RSP;
+	case X86_REG_RBP: return ASMC_REG_RBP;
+	case X86_REG_RSI: return ASMC_REG_RSI;
+	case X86_REG_RDI: return ASMC_REG_RDI;
+	case X86_REG_R8: return ASMC_REG_R8;
+	case X86_REG_R9: return ASMC_REG_R9;
 	default: log_error("reverse", "main", NULL, "unknown reg64: %02X", address);
 	}
 
 	return 0;
 }
 
-static reg_t read_reg32(u8 address)
+static asmc_reg_type_t read_reg32(u8 address)
 {
 	switch (address) {
-	case X86_REG_ECX: return REG_ECX;
-	case X86_REG_EBP: return REG_EBP;
+	case X86_REG_EAX: return ASMC_REG_EAX;
+	case X86_REG_ECX: return ASMC_REG_ECX;
+	case X86_REG_EBP: return ASMC_REG_EBP;
 	default: log_error("reverse", "main", NULL, "unknown reg32: %02X", address);
 	}
 
@@ -693,7 +630,7 @@ static int read_val(bin_t *bin, u64 *dst, uint size, size_t *off)
 	return 0;
 }
 
-static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t *instructions, size_t *off)
+static int read_program_section(bin_t *bin, u64 size, elf_ident_data_t data, asmc_t *asmc, size_t *off)
 {
 	int rex = 0;
 	int rex_w;
@@ -701,10 +638,12 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 	int rex_b;
 	int op_size = 0;
 	int cs	    = 0;
+	int rep	    = 0;
 	int cet	    = 0;
 
 	size_t end = *off + size;
 	while (*off < end) {
+		u64 addr = *off;
 		byte b;
 		read_byte(bin, &b, off);
 
@@ -715,18 +654,18 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			if (!rex) {
 				log_error("reverse", "main", NULL, "expected REX prefix");
 			}
-			if (op_size || cs || cet) {
+			if (op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_ADD_REG;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_ADD_REG;
 			read_byte(bin, &b, off);
 			byte mod = bits(b, 6, 0x3);
 			switch (mod) {
 			case 0x3: {
 				dputf(DST_STD(), "[REG64, REG64]\n");
-				instruction->s = read_reg64(bits(b, 3, 0x7));
-				instruction->d = read_reg64(bits(b, 0, 0x7));
+				op->s = read_reg64(bits(b, 3, 0x7));
+				op->d = read_reg64(bits(b, 0, 0x7));
 				break;
 			}
 			default: {
@@ -738,6 +677,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_SUB: { // SUB r/m64, r64 (Subtract r64 from r/m64)
@@ -745,18 +685,18 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			if (!rex) {
 				log_error("reverse", "main", NULL, "expected REX prefix");
 			}
-			if (op_size || cs || cet) {
+			if (op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_SUB_REG;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_SUB_REG;
 			read_byte(bin, &b, off);
 			byte mod = bits(b, 6, 0x3);
 			switch (mod) {
 			case 0x3: {
 				dputf(DST_STD(), "[REG64, REG64]\n");
-				instruction->s = read_reg64(bits(b, 3, 0x7));
-				instruction->d = read_reg64(bits(b, 0, 0x7));
+				op->s = read_reg64(bits(b, 3, 0x7));
+				op->d = read_reg64(bits(b, 0, 0x7));
 				break;
 			}
 			default: {
@@ -768,27 +708,28 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_XOR: { // XOR r/m64, r64 (r/m64 XOR r64)
 			dputf(DST_STD(), "XOR\n");
-			if (op_size || cs || cet) {
+			if (op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_XOR;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_XOR;
 			read_byte(bin, &b, off);
 			byte mod = bits(b, 6, 0x3);
 			switch (mod) {
 			case 0x3: {
 				if (rex) {
 					dputf(DST_STD(), "[REG64, REG64]\n");
-					instruction->s = read_reg64(rex_r * 8 + bits(b, 3, 0x7));
-					instruction->d = read_reg64(rex_b * 8 + bits(b, 0, 0x7));
+					op->s = read_reg64(rex_r * 8 + bits(b, 3, 0x7));
+					op->d = read_reg64(rex_b * 8 + bits(b, 0, 0x7));
 				} else {
 					dputf(DST_STD(), "[REG32, REG32]\n");
-					instruction->s = read_reg32(bits(b, 3, 0x7));
-					instruction->d = read_reg32(bits(b, 0, 0x7));
+					op->s = read_reg32(bits(b, 3, 0x7));
+					op->d = read_reg32(bits(b, 0, 0x7));
 				}
 				break;
 			}
@@ -801,6 +742,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_CMP: { // CMP r/m64,r64 (Compare r64 with r/m64)
@@ -808,18 +750,18 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			if (!rex) {
 				log_error("reverse", "main", NULL, "expected REX prefix");
 			}
-			if (op_size || cs || cet) {
+			if (op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_CMP;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_CMP_REG;
 			read_byte(bin, &b, off);
 			byte mod = bits(b, 6, 0x3);
 			switch (mod) {
 			case 0x3: {
 				dputf(DST_STD(), "[REG64, REG64]\n");
-				instruction->s = read_reg64(bits(b, 3, 0x7));
-				instruction->d = read_reg64(bits(b, 0, 0x7));
+				op->s = read_reg64(bits(b, 3, 0x7));
+				op->d = read_reg64(bits(b, 0, 0x7));
 				break;
 			}
 			default: {
@@ -831,11 +773,12 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_CMP_IMM: { // CMP r/m8, imm8 (Compare imm8 with r/m8)
-			dputf(DST_STD(), "CMP_IMM\n");
-			if (rex || op_size || cs || cet) {
+			dputf(DST_STD(), "CMP_IMM8\n");
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
 
@@ -846,15 +789,15 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				byte reg = bits(b, 3, 0x7);
 				switch (reg) {
 				case 0x7: {
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_CMP_IMM;
-					byte rm			   = bits(b, 0, 0x7);
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_CMP_IMM8;
+					byte rm	      = bits(b, 0, 0x7);
 					switch (rm) {
 					case 0x5: {
 						dputf(DST_STD(), "[[RIP + disp32], imm8]\n");
 						if (data == ELF_IDENT_DATA_LE) {
-							read_val(bin, &instruction->d, 4, off);
-							read_val(bin, &instruction->s, 1, off);
+							read_val(bin, &op->d, 4, off);
+							read_val(bin, &op->s, 1, off);
 						} else {
 							log_error("reverse", "main", NULL, "unknown data: %d", data);
 						}
@@ -884,6 +827,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_ALU: {
@@ -891,7 +835,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			if (!rex) {
 				log_error("reverse", "main", NULL, "expected REX prefix");
 			}
-			if (op_size || cs || cet) {
+			if (op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
 			read_byte(bin, &b, off);
@@ -902,14 +846,14 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				switch (reg) {
 				case 0x7: { // CMP r/m64, imm8 (Compare imm8 with r/m64)
 					dputf(DST_STD(), "CMP [[RIP + disp32], imm8]\n");
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_CMP_IMM;
-					byte rm			   = bits(b, 0, 0x7);
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_CMP_IMM32;
+					byte rm	      = bits(b, 0, 0x7);
 					switch (rm) {
 					case 0x5: {
 						if (data == ELF_IDENT_DATA_LE) {
-							read_val(bin, &instruction->d, 4, off);
-							read_val(bin, &instruction->s, 1, off);
+							read_val(bin, &op->d, 4, off);
+							read_val(bin, &op->s, 1, off);
 						} else {
 							log_error("reverse", "main", NULL, "unknown data: %d", data);
 						}
@@ -935,11 +879,11 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				switch (reg) {
 				case 0x0: { // ADD r/m64, imm8 (Add sign-extended imm8 to r/m64)
 					dputf(DST_STD(), "ADD [REG64, IMM8]\n");
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_ADD_IMM;
-					instruction->d		   = read_reg64(bits(b, 0, 0x7));
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_ADD_IMM;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
 					if (data == ELF_IDENT_DATA_LE) {
-						read_val(bin, &instruction->s, 1, off);
+						read_val(bin, &op->s, 1, off);
 					} else {
 						log_error("reverse", "main", NULL, "unknown data: %d", data);
 					}
@@ -947,11 +891,11 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				}
 				case 0x4: { // AND r/m64, imm8 (r/m64 AND imm8 (sign-extended))
 					dputf(DST_STD(), "AND [REG64, IMM8]\n");
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_AND;
-					instruction->d		   = read_reg64(bits(b, 0, 0x7));
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_AND;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
 					if (data == ELF_IDENT_DATA_LE) {
-						read_val(bin, &instruction->s, 1, off);
+						read_val(bin, &op->s, 1, off);
 					} else {
 						log_error("reverse", "main", NULL, "unknown data: %d", data);
 					}
@@ -959,11 +903,11 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				}
 				case 0x5: { // SUB r/m64, imm8 (Subtract sign-extended imm8 from r/m64)
 					dputf(DST_STD(), "SUB [REG64, IMM8]\n");
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_SUB_IMM;
-					instruction->d		   = read_reg64(bits(b, 0, 0x7));
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_SUB_IMM;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
 					if (data == ELF_IDENT_DATA_LE) {
-						read_val(bin, &instruction->s, 1, off);
+						read_val(bin, &op->s, 1, off);
 					} else {
 						log_error("reverse", "main", NULL, "unknown data: %d", data);
 					}
@@ -985,6 +929,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_TEST: { // TEST r/m64, r64 (AND r64 with r/m64; set SF, ZF, PF according to result)
@@ -992,18 +937,18 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			if (!rex) {
 				log_error("reverse", "main", NULL, "expected REX prefix");
 			}
-			if (op_size || cs || cet) {
+			if (op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_TEST;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_TEST;
 			read_byte(bin, &b, off);
 			byte mod = bits(b, 6, 0x3);
 			switch (mod) {
 			case 0x3: {
 				dputf(DST_STD(), "[REG64, REG64]\n");
-				instruction->s = read_reg64(bits(b, 3, 0x7));
-				instruction->d = read_reg64(bits(b, 0, 0x7));
+				op->s = read_reg64(bits(b, 3, 0x7));
+				op->d = read_reg64(bits(b, 0, 0x7));
 				break;
 			}
 			default: {
@@ -1015,6 +960,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_MOV_REG: { // MOV r/m64, r64 (Move r64 to r/m64)
@@ -1022,18 +968,18 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			if (!rex) {
 				log_error("reverse", "main", NULL, "expected REX prefix");
 			}
-			if (op_size || cs || cet) {
+			if (op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_MOV_REG;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_MOV_REG;
 			read_byte(bin, &b, off);
 			byte mod = bits(b, 6, 0x3);
 			switch (mod) {
 			case 0x03: {
 				dputf(DST_STD(), "[REG64, REG64]\n");
-				instruction->s = read_reg64(bits(b, 3, 0x7));
-				instruction->d = read_reg64(rex_b * 8 + bits(b, 0, 0x7));
+				op->s = read_reg64(bits(b, 3, 0x7));
+				op->d = read_reg64(rex_b * 8 + bits(b, 0, 0x7));
 				break;
 			}
 			default: {
@@ -1045,6 +991,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_MOV_RIP: { // MOV r64, r/m64 (Move r/m64 to r64)
@@ -1052,22 +999,22 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			if (!rex) {
 				log_error("reverse", "main", NULL, "expected REX prefix");
 			}
-			if (op_size || cs || cet) {
+			if (op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_MOV_RIP;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_MOV_RIP;
 			read_byte(bin, &b, off);
 			byte mod = bits(b, 6, 0x3);
 			switch (mod) {
 			case 0x0: {
-				instruction->d = read_reg64(bits(b, 3, 0x7));
-				byte rm	       = bits(b, 0, 0x7);
+				op->d	= read_reg64(bits(b, 3, 0x7));
+				byte rm = bits(b, 0, 0x7);
 				switch (rm) {
 				case 0x5: {
 					dputf(DST_STD(), "[REG64, [RIP + disp32]]\n");
 					if (data == ELF_IDENT_DATA_LE) {
-						read_val(bin, &instruction->s, 4, off);
+						read_val(bin, &op->s, 4, off);
 					} else {
 						log_error("reverse", "main", NULL, "unknown data: %d", data);
 					}
@@ -1089,6 +1036,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_LEA: { // LEA r64,m (Store effective address for m in register r64)
@@ -1096,22 +1044,22 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			if (!rex) {
 				log_error("reverse", "main", NULL, "expected REX prefix");
 			}
-			if (op_size || cs || cet) {
+			if (op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_LEA;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_LEA;
 			read_byte(bin, &b, off);
 			byte mod = bits(b, 6, 0x3);
 			switch (mod) {
 			case 0x0: {
-				instruction->d = read_reg64(bits(b, 3, 0x7));
-				byte rm	       = bits(b, 0, 0x7);
+				op->d	= read_reg64(bits(b, 3, 0x7));
+				byte rm = bits(b, 0, 0x7);
 				switch (rm) {
 				case 0x5: {
 					dputf(DST_STD(), "[REG64, [RIP + disp32]]\n");
 					if (data == ELF_IDENT_DATA_LE) {
-						read_val(bin, &instruction->s, 4, off);
+						read_val(bin, &op->s, 4, off);
 					} else {
 						log_error("reverse", "main", NULL, "unknown data: %d", data);
 					}
@@ -1133,18 +1081,19 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_MOV_EAX: { // MOV r32, imm32 (Move imm32 to r32)
 			dputf(DST_STD(), "MOV [EAX, imm32]\n");
-			if (rex || op_size || cs || cet) {
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_MOV_IMM;
-			instruction->d		   = REG_EAX;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_MOV_IMM;
+			op->d	      = ASMC_REG_EAX;
 			if (data == ELF_IDENT_DATA_LE) {
-				read_val(bin, &instruction->s, 4, off);
+				read_val(bin, &op->s, 4, off);
 			} else {
 				log_error("reverse", "main", NULL, "unknown data: %d", data);
 			}
@@ -1155,7 +1104,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			if (!rex) {
 				log_error("reverse", "main", NULL, "expected REX prefix");
 			}
-			if (op_size || cs || cet) {
+			if (op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
 			read_byte(bin, &b, off);
@@ -1166,11 +1115,11 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				switch (reg) {
 				case 0x5: {
 					dputf(DST_STD(), "SHR [REG64, IMM8]\n");
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_SHR;
-					instruction->d		   = read_reg64(bits(b, 0, 0x7));
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_SHR;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
 					if (data == ELF_IDENT_DATA_LE) {
-						read_val(bin, &instruction->s, 1, off);
+						read_val(bin, &op->s, 1, off);
 					} else {
 						log_error("reverse", "main", NULL, "unknown data: %d", data);
 					}
@@ -1178,11 +1127,11 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				}
 				case 0x7: {
 					dputf(DST_STD(), "SAR [REG64, IMM8]\n");
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_SAR;
-					instruction->d		   = read_reg64(bits(b, 0, 0x7));
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_SAR;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
 					if (data == ELF_IDENT_DATA_LE) {
-						read_val(bin, &instruction->s, 1, off);
+						read_val(bin, &op->s, 1, off);
 					} else {
 						log_error("reverse", "main", NULL, "unknown data: %d", data);
 					}
@@ -1205,11 +1154,12 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_MOV_IMM8: { // MOV r/m8, imm8 (Move imm8 to r/m8)
 			dputf(DST_STD(), "MOV_IMM8\n");
-			if (rex || op_size || cs || cet) {
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
 			read_byte(bin, &b, off);
@@ -1220,13 +1170,13 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				switch (reg) {
 				case 0x0: {
 					dputf(DST_STD(), "MOV_IMM8 [[RIP + disp32], imm8]\n");
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_MOV_IMM8;
-					byte rm			   = bits(b, 0, 0x7);
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_MOV_IMM8;
+					byte rm	      = bits(b, 0, 0x7);
 					switch (rm) {
 					case 0x5: {
-						read_val(bin, &instruction->d, 4, off);
-						read_val(bin, &instruction->s, 1, off);
+						read_val(bin, &op->d, 4, off);
+						read_val(bin, &op->s, 1, off);
 						break;
 					}
 					default: {
@@ -1253,6 +1203,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_MOV_IMM: { // MOV r/m64, imm32 (Move imm32 sign extended to 64-bits to r/m64)
@@ -1260,7 +1211,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			if (!rex) {
 				log_error("reverse", "main", NULL, "expected REX prefix");
 			}
-			if (op_size || cs || cet) {
+			if (op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
 			read_byte(bin, &b, off);
@@ -1271,11 +1222,11 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				switch (reg) {
 				case 0x0: {
 					dputf(DST_STD(), "MOV_IMM [REG64, IMM32]\n");
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_MOV_IMM;
-					instruction->d		   = read_reg64(bits(b, 0, 0x7));
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_MOV_IMM;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
 					if (data == ELF_IDENT_DATA_LE) {
-						read_val(bin, &instruction->s, 4, off);
+						read_val(bin, &op->s, 4, off);
 					} else {
 						log_error("reverse", "main", NULL, "unknown data: %d", data);
 					}
@@ -1297,120 +1248,129 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_PUSH_RSP: { // PUSH r64 (Push r64)
 			dputf(DST_STD(), "PUSH_RSP\n");
-			if (rex || op_size || cs || cet) {
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_PUSH;
-			instruction->d		   = REG_RSP;
-			op_size			   = 0;
-			cs			   = 0;
-			cet			   = 0;
-			rex			   = 0;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_PUSH;
+			op->d	      = ASMC_REG_RSP;
+			op_size	      = 0;
+			cs	      = 0;
+			cet	      = 0;
+			rex	      = 0;
+			rep	      = 0;
 			break;
 		}
 		case X86_OP_PUSH_RBP: { // PUSH r64 (Push r64)
 			dputf(DST_STD(), "PUSH_RBP\n");
-			if (rex || op_size || cs || cet) {
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_PUSH;
-			instruction->d		   = REG_RBP;
-			op_size			   = 0;
-			cs			   = 0;
-			cet			   = 0;
-			rex			   = 0;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_PUSH;
+			op->d	      = ASMC_REG_RBP;
+			op_size	      = 0;
+			cs	      = 0;
+			cet	      = 0;
+			rex	      = 0;
+			rep	      = 0;
 			break;
 		}
 		case X86_OP_PUSH_RAX: { // PUSH r64 (Push r64)
 			dputf(DST_STD(), "PUSH_RAX\n");
-			if (rex || op_size || cs || cet) {
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_PUSH;
-			instruction->d		   = REG_RAX;
-			op_size			   = 0;
-			cs			   = 0;
-			cet			   = 0;
-			rex			   = 0;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_PUSH;
+			op->d	      = ASMC_REG_RAX;
+			op_size	      = 0;
+			cs	      = 0;
+			cet	      = 0;
+			rex	      = 0;
+			rep	      = 0;
 			break;
 		}
 		case X86_OP_POP_RBP: { // POP r64 (Pop top of stack into r64; increment stack pointer. Cannot encode 32-bit
 			// operand size.)
 			dputf(DST_STD(), "POP_RBP\n");
-			if (rex || op_size || cs || cet) {
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_POP;
-			instruction->d		   = REG_RBP;
-			op_size			   = 0;
-			cs			   = 0;
-			cet			   = 0;
-			rex			   = 0;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_POP;
+			op->d	      = ASMC_REG_RBP;
+			op_size	      = 0;
+			cs	      = 0;
+			cet	      = 0;
+			rex	      = 0;
+			rep	      = 0;
 			break;
 		}
 		case X86_OP_POP_RSI: { // POP r64 (Pop top of stack into r64; increment stack pointer. Cannot encode 32-bit
 			// operand size.)
 			dputf(DST_STD(), "POP_RSI\n");
-			if (rex || op_size || cs || cet) {
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_POP;
-			instruction->d		   = REG_RSI;
-			op_size			   = 0;
-			cs			   = 0;
-			cet			   = 0;
-			rex			   = 0;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_POP;
+			op->d	      = ASMC_REG_RSI;
+			op_size	      = 0;
+			cs	      = 0;
+			cet	      = 0;
+			rex	      = 0;
+			rep	      = 0;
 			break;
 		}
 		case X86_OP_JE: { // JE rel8 (Jump short if equal (ZF=1))
 			dputf(DST_STD(), "JE [RIP + disp8]\n");
-			if (rex || op_size || cs || cet) {
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_JE;
-			instruction->addr	   = *off;
-			read_val(bin, &instruction->d, 1, off);
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_JE;
+			op->addr      = *off;
+			read_val(bin, &op->d, 1, off);
 			op_size = 0;
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_JNE: { // JNE rel8 (Jump short if not equal (ZF=0))
 			dputf(DST_STD(), "JNE [RIP + disp8]\n");
-			if (rex || op_size || cs || cet) {
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_JNE;
-			read_val(bin, &instruction->d, 1, off);
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_JNE;
+			read_val(bin, &op->d, 1, off);
 			op_size = 0;
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_RET: { // RET (Near return to calling procedure.)
 			dputf(DST_STD(), "RET\n");
-			if (rex || op_size || cs || cet) {
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_RET;
-			op_size			   = 0;
-			cs			   = 0;
-			cet			   = 0;
-			rex			   = 0;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_RET;
+			op_size	      = 0;
+			cs	      = 0;
+			cet	      = 0;
+			rex	      = 0;
+			rep	      = 0;
 			break;
 		}
 		case X86_OP_SAR1: { // SAR r/m64, 1 (Signed divide r/m64 by 2, once.)
@@ -1418,7 +1378,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			if (!rex) {
 				log_error("reverse", "main", NULL, "expected REX prefix");
 			}
-			if (op_size || cs || cet) {
+			if (op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
 			read_byte(bin, &b, off);
@@ -1429,10 +1389,10 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				switch (reg) {
 				case 0x7: {
 					dputf(DST_STD(), "SAR1 [REG64]\n");
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_SAR;
-					instruction->s		   = 1;
-					instruction->d		   = read_reg64(bits(b, 0, 0x7));
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_SAR;
+					op->s	      = 1;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
 					break;
 				}
 				default: {
@@ -1451,51 +1411,55 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_CALL: { // CALL rel32 (Near return to calling procedure)
 			dputf(DST_STD(), "CALL [RIP + disp32]\n");
-			if (rex || op_size || cs || cet) {
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_CALL_REL;
-			read_val(bin, &instruction->d, 4, off);
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_CALL_REL;
+			read_val(bin, &op->d, 4, off);
 			op_size = 0;
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_JMP: { // JMP rel32 (Jump near, relative, RIP = RIP + 32-bit displacement sign extended to 64-bits.)
-			dputf(DST_STD(), "JMP [RIP + disp32]\n");
-			if (rex || op_size || cs || cet) {
+			dputf(DST_STD(), "JMP [rel32]\n");
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_JMP_IMM;
-			read_val(bin, &instruction->d, 4, off);
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_JMP_REL;
+			read_val(bin, &op->d, 4, off);
 			op_size = 0;
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_OP_HLT: { // HLT (Halt)
 			dputf(DST_STD(), "HLT\n");
-			if (rex || op_size || cs || cet) {
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
-			instruction_t *instruction = arr_add(instructions, NULL);
-			instruction->opcode	   = OP_HLT;
-			op_size			   = 0;
-			cs			   = 0;
-			cet			   = 0;
-			rex			   = 0;
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_HLT;
+			op_size	      = 0;
+			cs	      = 0;
+			cet	      = 0;
+			rex	      = 0;
+			rep	      = 0;
 			break;
 		}
-		case X86_OP_JMP_CALL: { // JMP/CALL
-			dputf(DST_STD(), "JMP/CALL\n");
+		case X86_OP_JMP_CALL_PUSH: { // JMP/CALL/PUSH
+			dputf(DST_STD(), "JMP/CALL/PUSH\n");
 			if (rex || op_size || cs || cet) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
@@ -1509,14 +1473,74 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				switch (reg) {
 				case 0x2: { // CALL r/m64 (Call near, absolute indirect, address given in r/m64.)
 					dputf(DST_STD(), "CALL ");
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_CALL_RIP;
-					byte rm			   = bits(b, 0, 0x7);
+					if (rep) {
+						log_error("reverse", "main", NULL, "prefix was not expected");
+					}
+					byte rm = bits(b, 0, 0x7);
 					switch (rm) {
 					case 0x5: {
 						dputf(DST_STD(), "[RIP + disp32]\n");
+						asmc_op_t *op = arr_add(&asmc->ops, NULL);
+						op->type      = ASMC_OP_CALL_RIP;
+						op->addr      = addr;
+						op->str_off   = 0;
 						if (data == ELF_IDENT_DATA_LE) {
-							read_val(bin, &instruction->d, 4, off);
+							read_val(bin, &op->d, 4, off);
+						} else {
+							log_error("reverse", "main", NULL, "unknown data: %d", data);
+						}
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown rm: %02X", rm);
+						break;
+					}
+					}
+					break;
+				}
+				case 0x4: {
+					dputf(DST_STD(), "JMP ");
+					if (rep == 0) {
+						log_error("reverse", "main", NULL, "REP prefix was expected");
+					}
+					byte rm = bits(b, 0, 0x7);
+					switch (rm) {
+					case 0x5: {
+						dputf(DST_STD(), "[RIP + disp32]\n");
+						asmc_op_t *op = arr_add(&asmc->ops, NULL);
+						op->type      = ASMC_OP_JMP_RIP;
+						op->addr      = addr;
+						op->str_off   = 0;
+						if (data == ELF_IDENT_DATA_LE) {
+							read_val(bin, &op->d, 4, off);
+						} else {
+							log_error("reverse", "main", NULL, "unknown data: %d", data);
+						}
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown rm: %02X", rm);
+						break;
+					}
+					}
+					break;
+				}
+				case 0x6: { // PUSH r/m32 (Push r/m32)
+					dputf(DST_STD(), "PUSH ");
+					if (rep) {
+						log_error("reverse", "main", NULL, "prefix was not expected");
+					}
+
+					byte rm = bits(b, 0, 0x7);
+					switch (rm) {
+					case 0x5: {
+						dputf(DST_STD(), "[RIP + disp32]\n");
+						asmc_op_t *op = arr_add(&asmc->ops, NULL);
+						op->type      = ASMC_OP_PUSH_RIP;
+						op->addr      = addr;
+						op->str_off   = 0;
+						if (data == ELF_IDENT_DATA_LE) {
+							read_val(bin, &op->d, 4, off);
 						} else {
 							log_error("reverse", "main", NULL, "unknown data: %d", data);
 						}
@@ -1537,20 +1561,23 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				break;
 			}
 			case 0x3: {
+				if (rep) {
+					log_error("reverse", "main", NULL, "prefix was not expected");
+				}
 				switch (reg) {
 				case 0x2: { // CALL r/m64 (Call near, absolute indirect, address given in r/m64)
 					dputf(DST_STD(), "CALL [REG64]\n");
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_CALL_REG;
-					instruction->d		   = read_reg64(bits(b, 0, 0x7));
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_CALL_REG;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
 					break;
 				}
 				case 0x4: { // JMP r/m64 (Jump near, absolute indirect, RIP = 64-Bit offset from register or
 					    // memory.)
 					dputf(DST_STD(), "JMP [REG64]\n");
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_JMP_REG;
-					instruction->d		   = read_reg64(bits(b, 0, 0x7));
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_JMP_REG;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
 					break;
 				}
 				default: {
@@ -1569,44 +1596,60 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 			cs	= 0;
 			cet	= 0;
 			rex	= 0;
+			rep	= 0;
 			break;
 		}
 		case X86_PREFIX_OP_SIZE: {
 			dputf(DST_STD(), "+OP-SIZE\n");
+			if (rex || op_size || cs || cet || rep) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
 			op_size = 1;
 			break;
 		}
 		case X86_PREFIX_CS: { // CS segment prefix
+			dputf(DST_STD(), "+CS\n");
 			if (op_size == 0) {
 				log_error("reverse", "main", NULL, "OP-SIZE prefix expected");
 			}
-			dputf(DST_STD(), "+CS\n");
+			if (rex || cs || cet || rep) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
 			cs = 1;
 			break;
 		}
-		case X86_PREFIX_CET: { // CET prefix
-			if (rex || op_size || cs) {
+		case X86_PREFIX_REP: { // REP prefix
+			dputf(DST_STD(), "+REP\n");
+			if (rex || op_size || cs || cet || rep) {
 				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
+			rep = 1;
+			break;
+		}
+		case X86_PREFIX_CET: { // CET prefix
 			dputf(DST_STD(), "+CET\n");
+			if (rex || op_size || cs || cet || rep) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
 			cet = 1;
 			break;
 		}
 		case X86_PREFIX_EXT: { // Extended opcode prefix
 			dputf(DST_STD(), "+EXT\n");
-			if (rex) {
-				log_error("reverse", "main", NULL, "REX prefix was not expected");
+			if (rex || rep) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
 			}
 			read_byte(bin, &b, off);
 			switch (b) {
 			case X86_EXT_SYSCALL: {
 				dputf(DST_STD(), "SYSCALL\n");
-				instruction_t *instruction = arr_add(instructions, NULL);
-				instruction->opcode	   = OP_SYSCALL;
-				op_size			   = 0;
-				cs			   = 0;
-				cet			   = 0;
-				rex			   = 0;
+				asmc_op_t *op = arr_add(&asmc->ops, NULL);
+				op->type      = ASMC_OP_SYSCALL;
+				op_size	      = 0;
+				cs	      = 0;
+				cet	      = 0;
+				rex	      = 0;
+				rep	      = 0;
 				break;
 			}
 			case X86_EXT_OPCODE_GROUP: { // extended opcode group
@@ -1615,12 +1658,13 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				switch (b) {
 				case X86_EXT_OPCODE_ENDBR64: {
 					dputf(DST_STD(), "ENDBR64\n");
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_ENDBR64;
-					op_size			   = 0;
-					cs			   = 0;
-					cet			   = 0;
-					rex			   = 0;
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_ENDBR64;
+					op_size	      = 0;
+					cs	      = 0;
+					cet	      = 0;
+					rex	      = 0;
+					rep	      = 0;
 					break;
 				}
 				default: {
@@ -1641,9 +1685,12 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 					switch (reg) {
 					case 0x0: {
 						dputf(DST_STD(), "[REG64]\n");
-						instruction_t *instruction = arr_add(instructions, NULL);
-						instruction->opcode	   = OP_NOP;
-						instruction->d		   = read_reg64(bits(b, 0, 0x7));
+						asmc_op_t *op = arr_add(&asmc->ops, NULL);
+						op->type      = ASMC_OP_NOP;
+						op->d	      = 0;
+						op->d++; // EXT
+						op->d++; // NOP
+						op->d++; // MODRM
 						break;
 					}
 					default: {
@@ -1654,37 +1701,56 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 					break;
 				}
 				case 0x01: {
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_NOP8;
-					instruction->d		   = read_reg64(bits(b, 3, 0x7));
-					int sib			   = bits(b, 0, 0x7) == 0x4;
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_NOP;
+					op->d	      = 0;
+					if (op_size) {
+						op->d++;
+					}
+					op->d++; // EXT
+					op->d++; // NOP
+					op->d++; // MODRM
+					int sib = bits(b, 0, 0x7) == 0x4;
 					if (sib) {
+						op->d++;
 						dputf(DST_STD(), "[REG64 + REG64 + disp8]\n");
 						read_byte(bin, &b, off);
 						dputf(DST_STD(), "SIB\n");
-						instruction->sib = b;
+						op->sib = b;
 					} else {
 						dputf(DST_STD(), "[REG64 + disp8]\n");
 					}
 
-					read_val(bin, &instruction->s, 1, off);
+					op->d += 1;
+					read_val(bin, &op->s, 1, off);
 					break;
 				}
 				case 0x02: {
-					instruction_t *instruction = arr_add(instructions, NULL);
-					instruction->opcode	   = OP_NOP32;
-					instruction->d		   = read_reg64(bits(b, 3, 0x7));
-					int sib			   = bits(b, 0, 0x7) == 0x4;
+					asmc_op_t *op = arr_add(&asmc->ops, NULL);
+					op->type      = ASMC_OP_NOP;
+					op->d	      = 0;
+					if (op_size) {
+						op->d++;
+					}
+					if (cs) {
+						op->d++;
+					}
+					op->d++; // EXT
+					op->d++; // NOP
+					op->d++; // MODRM
+					int sib = bits(b, 0, 0x7) == 0x4;
 					if (sib) {
 						dputf(DST_STD(), "[REG64 + REG64 + disp32]\n");
+						op->d++;
 						read_byte(bin, &b, off);
 						dputf(DST_STD(), "SIB\n");
-						instruction->sib = b;
+						op->sib = b;
 					} else {
 						dputf(DST_STD(), "[REG64 + disp32]\n");
 					}
 
-					read_val(bin, &instruction->s, 4, off);
+					op->d += 4;
+					read_val(bin, &op->s, 4, off);
 					break;
 				}
 				default: {
@@ -1696,6 +1762,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				cs	= 0;
 				cet	= 0;
 				rex	= 0;
+				rep	= 0;
 				break;
 			}
 			default: {
@@ -1707,7 +1774,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 		}
 		default: {
 			if (bits(b, 4, 0xF) == 0x4) { // REX
-				if (rex || op_size || cs || cet) {
+				if (rex || op_size || cs || cet || rep) {
 					log_error("reverse", "main", NULL, "prefix was not expected");
 				}
 
@@ -1718,6 +1785,7 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 				op_size = 0;
 				cs	= 0;
 				cet	= 0;
+				rep	= 0;
 				rex	= 1;
 			} else {
 				log_error("reverse", "main", NULL, "unknown opcode: %02X", b);
@@ -1730,7 +1798,426 @@ static int read_program_data(bin_t *bin, u64 size, elf_ident_data_t data, arr_t 
 	return 0;
 }
 
-static int read_elf_header(bin_t *bin, size_t *off, arr_t *instructions)
+enum {
+	DYNAMIC_SECTION_TAG,
+	DYNAMIC_SECTION_VAL,
+};
+
+typedef enum dynamic_tag_e {
+	DYNAMIC_TAG_NULL,
+	DYNAMIC_TAG_NEEDED,
+	DYNAMIC_TAG_PLTRELSZ,
+	DYNAMIC_TAG_PLTGOT,
+	DYNAMIC_TAG_HASH,
+	DYNAMIC_TAG_STRTAB,
+	DYNAMIC_TAG_SYMTAB,
+	DYNAMIC_TAG_RELA,
+	DYNAMIC_TAG_RELASZ,
+	DYNAMIC_TAG_RELAENT,
+	DYNAMIC_TAG_STRSZ,
+	DYNAMIC_TAG_SYMENT,
+	DYNAMIC_TAG_INIT,
+	DYNAMIC_TAG_FINI,
+	DYNAMIC_TAG_SONAME,
+	DYNAMIC_TAG_RPATH,
+	DYNAMIC_TAG_SYMBOLIC,
+	DYNAMIC_TAG_REL,
+	DYNAMIC_TAG_RELSZ,
+	DYNAMIC_TAG_RELENT,
+	DYNAMIC_TAG_PLTREL,
+	DYNAMIC_TAG_DEBUG,
+	DYNAMIC_TAG_TEXTREL,
+	DYNAMIC_TAG_JMPREL,
+	DYNAMIC_TAG_BIND_NOW,
+	DYNAMIC_TAG_INIT_ARRAY,
+	DYNAMIC_TAG_FINI_ARRAY,
+	DYNAMIC_TAG_INIT_ARRAYSZ,
+	DYNAMIC_TAG_FINI_ARRAYSZ,
+	DYNAMIC_TAG_RUNPATH,
+	DYNAMIC_TAG_FLAGS,
+	DYNAMIC_TAG_ENCODING,
+	DYNAMIC_TAG_PREINIT_ARRAY,
+	DYNAMIC_TAG_PREINIT_ARRAYSZ,
+} tynamic_tag_t;
+
+#define DYNAMIC_TAG_LOOS	   0x6000000d
+#define DYNAMIC_TAG_SUNW_RTLDINF   0x6000000e
+#define DYNAMIC_TAG_HIOS	   0x6ffff000
+#define DYNAMIC_TAG_VALRNGLO	   0x6ffffd00
+#define DYNAMIC_TAG_CHECKSUM	   0x6ffffdf8
+#define DYNAMIC_TAG_PLTPADSZ	   0x6ffffdf9
+#define DYNAMIC_TAG_MOVEENT	   0x6ffffdfa
+#define DYNAMIC_TAG_MOVESZ	   0x6ffffdfb
+#define DYNAMIC_TAG_FEATURE_1	   0x6ffffdfc
+#define DYNAMIC_TAG_POSFLAG_1	   0x6ffffdfd
+#define DYNAMIC_TAG_SYMINSZ	   0x6ffffdfe
+#define DYNAMIC_TAG_SYMINENT	   0x6ffffdff
+#define DYNAMIC_TAG_VALRNGHI	   0x6ffffdff
+#define DYNAMIC_TAG_ADDRRNGLO	   0x6ffffe00
+#define DYNAMIC_TAG_GNU_HASH	   0x6ffffef5
+#define DYNAMIC_TAG_CONFIG	   0x6ffffefa
+#define DYNAMIC_TAG_DEPAUDIT	   0x6ffffefb
+#define DYNAMIC_TAG_AUDIT	   0x6ffffefc
+#define DYNAMIC_TAG_PLTPAD	   0x6ffffefd
+#define DYNAMIC_TAG_MOVETAB	   0x6ffffefe
+#define DYNAMIC_TAG_SYMINFO	   0x6ffffeff
+#define DYNAMIC_TAG_ADDRRNGHI	   0x6ffffeff
+#define DYNAMIC_TAG_VERSYM	   0x6ffffff0
+#define DYNAMIC_TAG_RELACOUNT	   0x6ffffff9
+#define DYNAMIC_TAG_RELCOUNT	   0x6ffffffa
+#define DYNAMIC_TAG_FLAGS_1	   0x6ffffffb
+#define DYNAMIC_TAG_VERDEF	   0x6ffffffc
+#define DYNAMIC_TAG_VERDEFNUM	   0x6ffffffd
+#define DYNAMIC_TAG_VERNEED	   0x6ffffffe
+#define DYNAMIC_TAG_VERNEEDNUM	   0x6fffffff
+#define DYNAMIC_TAG_LOPROC	   0x70000000
+#define DYNAMIC_TAG_SPARC_REGISTER 0x70000001
+#define DYNAMIC_TAG_AUXILIARY	   0x7ffffffd
+#define DYNAMIC_TAG_USED	   0x7ffffffe
+#define DYNAMIC_TAG_FILTER	   0x7fffffff
+#define DYNAMIC_TAG_HIPROC	   0x7fffffff
+
+static int read_dynamic_section(bin_t *bin, u64 size, elf_ident_class_t class, tbl_t *tbl, size_t *off)
+{
+	static const schema_val_t tags[] = {
+		{DYNAMIC_TAG_NULL, STRVT("NULL")},
+		{DYNAMIC_TAG_NEEDED, STRVT("NEEDED")},
+		{DYNAMIC_TAG_PLTRELSZ, STRVT("NEEDED")},
+		{DYNAMIC_TAG_PLTGOT, STRVT("PLTGOT")},
+		{DYNAMIC_TAG_HASH, STRVT("HASH")},
+		{DYNAMIC_TAG_STRTAB, STRVT("STRTAB")},
+		{DYNAMIC_TAG_SYMTAB, STRVT("SYMTAB")},
+		{DYNAMIC_TAG_RELA, STRVT("RELA")},
+		{DYNAMIC_TAG_RELASZ, STRVT("RELASZ")},
+		{DYNAMIC_TAG_RELAENT, STRVT("RELAENT")},
+		{DYNAMIC_TAG_STRSZ, STRVT("STRSZ")},
+		{DYNAMIC_TAG_SYMENT, STRVT("SYMENT")},
+		{DYNAMIC_TAG_INIT, STRVT("INIT")},
+		{DYNAMIC_TAG_FINI, STRVT("FINI")},
+		{DYNAMIC_TAG_SONAME, STRVT("SONAME")},
+		{DYNAMIC_TAG_RPATH, STRVT("RPATH")},
+		{DYNAMIC_TAG_SYMBOLIC, STRVT("SYMBOLIC")},
+		{DYNAMIC_TAG_REL, STRVT("REL")},
+		{DYNAMIC_TAG_RELSZ, STRVT("RELSZ")},
+		{DYNAMIC_TAG_RELENT, STRVT("RELENT")},
+		{DYNAMIC_TAG_PLTREL, STRVT("PLTREL")},
+		{DYNAMIC_TAG_DEBUG, STRVT("DEBUG")},
+		{DYNAMIC_TAG_TEXTREL, STRVT("TEXTREL")},
+		{DYNAMIC_TAG_JMPREL, STRVT("JMPREL")},
+		{DYNAMIC_TAG_BIND_NOW, STRVT("BIND_NOW")},
+		{DYNAMIC_TAG_INIT_ARRAY, STRVT("INIT_ARRAY")},
+		{DYNAMIC_TAG_FINI_ARRAY, STRVT("FINI_ARRAY")},
+		{DYNAMIC_TAG_INIT_ARRAYSZ, STRVT("INIT_ARRAYSZ")},
+		{DYNAMIC_TAG_FINI_ARRAYSZ, STRVT("FINI_ARRAYSZ")},
+		{DYNAMIC_TAG_RUNPATH, STRVT("RUNPATH")},
+		{DYNAMIC_TAG_FLAGS, STRVT("FLAGS")},
+		{DYNAMIC_TAG_ENCODING, STRVT("ENCODING")},
+		{DYNAMIC_TAG_PREINIT_ARRAY, STRVT("PREINIT_ARRAY")},
+		{DYNAMIC_TAG_PREINIT_ARRAYSZ, STRVT("PREINIT_ARRAYSZ")},
+		{DYNAMIC_TAG_LOOS, STRVT("LOOS")},
+		{DYNAMIC_TAG_SUNW_RTLDINF, STRVT("SUNW_RTLDINF")},
+		{DYNAMIC_TAG_HIOS, STRVT("HIOS")},
+		{DYNAMIC_TAG_VALRNGLO, STRVT("VALRNGLO")},
+		{DYNAMIC_TAG_CHECKSUM, STRVT("CHECKSUM")},
+		{DYNAMIC_TAG_PLTPADSZ, STRVT("PLTPADSZ")},
+		{DYNAMIC_TAG_MOVEENT, STRVT("MOVEENT")},
+		{DYNAMIC_TAG_MOVESZ, STRVT("MOVESZ")},
+		{DYNAMIC_TAG_FEATURE_1, STRVT("FEATURE_1")},
+		{DYNAMIC_TAG_POSFLAG_1, STRVT("POSFLAG_1")},
+		{DYNAMIC_TAG_SYMINSZ, STRVT("SYMINSZ")},
+		{DYNAMIC_TAG_SYMINENT, STRVT("SYMINENT")},
+		{DYNAMIC_TAG_VALRNGHI, STRVT("VALRNGHI")},
+		{DYNAMIC_TAG_ADDRRNGLO, STRVT("ADDRRNGLO")},
+		{DYNAMIC_TAG_GNU_HASH, STRVT("GNU_HASH")},
+		{DYNAMIC_TAG_CONFIG, STRVT("CONFIG")},
+		{DYNAMIC_TAG_DEPAUDIT, STRVT("DEPAUDIT")},
+		{DYNAMIC_TAG_AUDIT, STRVT("AUDIT")},
+		{DYNAMIC_TAG_PLTPAD, STRVT("PLTPAD")},
+		{DYNAMIC_TAG_MOVETAB, STRVT("MOVETAB")},
+		{DYNAMIC_TAG_SYMINFO, STRVT("SYMINFO")},
+		{DYNAMIC_TAG_ADDRRNGHI, STRVT("ADDRRNGHI")},
+		{DYNAMIC_TAG_VERSYM, STRVT("VERSYM")},
+		{DYNAMIC_TAG_RELACOUNT, STRVT("RELACOUNT")},
+		{DYNAMIC_TAG_RELCOUNT, STRVT("RELCOUNT")},
+		{DYNAMIC_TAG_FLAGS_1, STRVT("FLAGS_1")},
+		{DYNAMIC_TAG_VERDEF, STRVT("VERDEF")},
+		{DYNAMIC_TAG_VERDEFNUM, STRVT("VERDEFNUM")},
+		{DYNAMIC_TAG_VERNEED, STRVT("VERNEED")},
+		{DYNAMIC_TAG_VERNEEDNUM, STRVT("VERNEEDNUM")},
+		{DYNAMIC_TAG_LOPROC, STRVT("LOPROC")},
+		{DYNAMIC_TAG_SPARC_REGISTER, STRVT("SPARC_REGISTER")},
+		{DYNAMIC_TAG_AUXILIARY, STRVT("AUXILIARY")},
+		{DYNAMIC_TAG_USED, STRVT("USED")},
+		{DYNAMIC_TAG_FILTER, STRVT("FILTER")},
+		{DYNAMIC_TAG_HIPROC, STRVT("HIPROC")},
+	};
+
+	schema_field_desc_t fields[] = {
+		[DYNAMIC_SECTION_TAG] = {STRVT("Tag"), 8, SCHEMA_TYPE_ENUM, tags, sizeof(tags)},
+		[DYNAMIC_SECTION_VAL] = {STRVT("Val"), 8, SCHEMA_TYPE_INT, NULL, 0},
+	};
+
+	tbl_init(tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 36, ALLOC_STD);
+	schema_add_fields(&tbl->schema, fields, sizeof(fields));
+
+	schema_member_desc_t members[] = {
+		{DYNAMIC_SECTION_TAG, 8},
+		{DYNAMIC_SECTION_VAL, 8},
+	};
+
+	schema_add_layout(&tbl->schema, members, sizeof(members), NULL);
+
+	schema_member_desc_t members32[] = {
+		{DYNAMIC_SECTION_TAG, 4},
+		{DYNAMIC_SECTION_VAL, 4},
+	};
+
+	schema_add_layout(&tbl->schema, members32, sizeof(members32), NULL);
+
+	schema_member_desc_t members64[] = {
+		{DYNAMIC_SECTION_TAG, 8},
+		{DYNAMIC_SECTION_VAL, 8},
+	};
+
+	schema_add_layout(&tbl->schema, members64, sizeof(members64), NULL);
+	tbl_init_rows(tbl, 16, ALLOC_STD);
+
+	uint layout;
+	switch (class) {
+	case ELF_IDENT_CLASS_32: layout = 1; break;
+	case ELF_IDENT_CLASS_64: layout = 2; break;
+	default: return 1;
+	}
+
+	size_t end = *off + size;
+	while (*off < end) {
+		void *data = tbl_add_row(tbl, NULL);
+		read_layout(bin, off, &tbl->schema, layout, data);
+	}
+
+	return 0;
+}
+
+enum {
+	DYN_SYM_SECTION_NAME_OFF,
+	DYN_SYM_SECTION_INFO,
+	DYN_SYM_SECTION_TYPE,
+	DYN_SYM_SECTION_BIND,
+	DYN_SYM_SECTION_OTHER,
+	DYN_SYM_SECTION_INDEX,
+	DYN_SYM_SECTION_VALUE,
+	DYN_SYM_SECTION_SIZE,
+	DYN_SYM_SECTION_NAME,
+};
+
+static int map_dynsym_type(tbl_t *tbl, uint row, uint col, const void *data, void *priv)
+{
+	(void)priv;
+	const u8 info = *(u8 *)data;
+	u8 type	      = (info >> 0) & 0xF;
+	return tbl_set_cell(tbl, row, col, 0, &type);
+}
+
+static int map_dynsym_bind(tbl_t *tbl, uint row, uint col, const void *data, void *priv)
+{
+	(void)priv;
+	const u8 info = *(u8 *)data;
+	u8 type	      = (info >> 4) & 0xF;
+	return tbl_set_cell(tbl, row, col, 0, &type);
+}
+
+enum {
+	DYNSYM_TYPE_NOTYPE,
+	DYNSYM_TYPE_OBJECT,
+	DYNSYM_TYPE_FUNC,
+};
+
+enum {
+	DYNSYM_BIND_LOCAL,
+	DYNSYM_BIND_GLOBAL,
+	DYNSYM_BIND_WEAK,
+};
+
+static int read_dynsym_section(bin_t *bin, u64 size, elf_ident_class_t class, u64 dynstr_off, tbl_t *tbl, size_t *off)
+{
+	static const schema_val_t types[] = {
+		{DYNSYM_TYPE_NOTYPE, STRVT("NOTYPE")},
+		{DYNSYM_TYPE_OBJECT, STRVT("OBJECT")},
+		{DYNSYM_TYPE_FUNC, STRVT("FUNC")},
+	};
+
+	static const schema_val_t binds[] = {
+		{DYNSYM_BIND_LOCAL, STRVT("LOCAL")},
+		{DYNSYM_BIND_GLOBAL, STRVT("GLOBAL")},
+		{DYNSYM_BIND_WEAK, STRVT("WEAK")},
+	};
+
+	schema_field_desc_t fields[] = {
+		[DYN_SYM_SECTION_NAME_OFF] = {STRVT("Name"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		[DYN_SYM_SECTION_INFO]	   = {STRVT("Info"), 1, SCHEMA_TYPE_INT, NULL, 0},
+		[DYN_SYM_SECTION_TYPE]	   = {STRVT("Type"), 1, SCHEMA_TYPE_ENUM, types, sizeof(types)},
+		[DYN_SYM_SECTION_BIND]	   = {STRVT("Bind"), 1, SCHEMA_TYPE_ENUM, binds, sizeof(binds)},
+		[DYN_SYM_SECTION_OTHER]	   = {STRVT("Other"), 1, SCHEMA_TYPE_INT, NULL, 0},
+		[DYN_SYM_SECTION_INDEX]	   = {STRVT("Index"), 2, SCHEMA_TYPE_INT, NULL, 0},
+		[DYN_SYM_SECTION_VALUE]	   = {STRVT("Value"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[DYN_SYM_SECTION_SIZE]	   = {STRVT("Size"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[DYN_SYM_SECTION_NAME]	   = {STRVT("Name"), 0, SCHEMA_TYPE_STR, NULL, 0},
+	};
+
+	tbl_init(tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 36, ALLOC_STD);
+	schema_add_fields(&tbl->schema, fields, sizeof(fields));
+
+	schema_member_desc_t members[] = {
+		{DYN_SYM_SECTION_NAME_OFF, 4},
+		{DYN_SYM_SECTION_INFO, 1},
+		{DYN_SYM_SECTION_TYPE, 1},
+		{DYN_SYM_SECTION_BIND, 1},
+		{DYN_SYM_SECTION_OTHER, 1},
+		{DYN_SYM_SECTION_INDEX, 2},
+		{DYN_SYM_SECTION_VALUE, 8},
+		{DYN_SYM_SECTION_SIZE, 8},
+		{DYN_SYM_SECTION_NAME, 0},
+	};
+
+	schema_add_layout(&tbl->schema, members, sizeof(members), NULL);
+
+	schema_member_desc_t members32[] = {
+		{DYN_SYM_SECTION_NAME_OFF, 4},
+		{DYN_SYM_SECTION_VALUE, 4},
+		{DYN_SYM_SECTION_SIZE, 4},
+		{DYN_SYM_SECTION_INFO, 1},
+		{DYN_SYM_SECTION_OTHER, 1},
+		{DYN_SYM_SECTION_INDEX, 2},
+	};
+
+	schema_add_layout(&tbl->schema, members32, sizeof(members32), NULL);
+
+	schema_member_desc_t members64[] = {
+		{DYN_SYM_SECTION_NAME_OFF, 4},
+		{DYN_SYM_SECTION_INFO, 1},
+		{DYN_SYM_SECTION_OTHER, 1},
+		{DYN_SYM_SECTION_INDEX, 2},
+		{DYN_SYM_SECTION_VALUE, 8},
+		{DYN_SYM_SECTION_SIZE, 8},
+	};
+
+	schema_add_layout(&tbl->schema, members64, sizeof(members64), NULL);
+	tbl_init_rows(tbl, 16, ALLOC_STD);
+
+	uint layout;
+	switch (class) {
+	case ELF_IDENT_CLASS_32: layout = 1; break;
+	case ELF_IDENT_CLASS_64: layout = 2; break;
+	default: return 1;
+	}
+
+	size_t end = *off + size;
+	while (*off < end) {
+		void *data = tbl_add_row(tbl, NULL);
+		read_layout(bin, off, &tbl->schema, layout, data);
+	}
+
+	tbl_map(tbl, DYN_SYM_SECTION_INFO, DYN_SYM_SECTION_TYPE, map_dynsym_type, NULL);
+	tbl_map(tbl, DYN_SYM_SECTION_INFO, DYN_SYM_SECTION_BIND, map_dynsym_bind, NULL);
+	const char *dynstr_offset = &((char *)bin->buf.data)[dynstr_off];
+	tbl_map(tbl, DYN_SYM_SECTION_NAME_OFF, DYN_SYM_SECTION_NAME, map_name, (void *)dynstr_offset);
+
+	return 0;
+}
+
+enum {
+	RELA_DYN_SECTION_OFFSET,
+	RELA_DYN_SECTION_TYPE,
+	RELA_DYN_SECTION_BIND,
+	RELA_DYN_SECTION_ADDEND,
+	RELA_DYN_SECTION_NAME,
+};
+
+#define R_X86_64_GLOB_DAT 6
+#define R_X86_64_RELATIVE 8
+
+static int map_rela_dyn_name(tbl_t *tbl, uint row, uint col, const void *data, void *priv)
+{
+	tbl_t *dynsym = priv;
+
+	const u32 *bind = data;
+
+	const size_t *name_off = tbl_get_cell(dynsym, *bind, DYN_SYM_SECTION_NAME);
+	strv_t name	       = strvbuf_get(&dynsym->strs, *name_off);
+	if (tbl_set_cell_str(tbl, row, col, 0, name)) {
+		log_error("reverse", "main", NULL, "Failed to set name");
+		return 1;
+	}
+
+	return 0;
+}
+
+static int read_rela_dyn_section(bin_t *bin, u64 size, elf_ident_class_t class, const tbl_t *dynsym, tbl_t *tbl, size_t *off)
+{
+	static const schema_val_t types[] = {
+		{R_X86_64_GLOB_DAT, STRVT("GLOB_DAT")},
+		{R_X86_64_RELATIVE, STRVT("RELATIVE")},
+	};
+
+	schema_field_desc_t fields[] = {
+		[RELA_DYN_SECTION_OFFSET] = {STRVT("Offset"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[RELA_DYN_SECTION_TYPE]	  = {STRVT("Type"), 4, SCHEMA_TYPE_ENUM, types, sizeof(types)},
+		[RELA_DYN_SECTION_BIND]	  = {STRVT("Bind"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		[RELA_DYN_SECTION_ADDEND] = {STRVT("Addend"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[RELA_DYN_SECTION_NAME]	  = {STRVT("Name"), 0, SCHEMA_TYPE_STR, NULL, 0},
+	};
+
+	tbl_init(tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 36, ALLOC_STD);
+	schema_add_fields(&tbl->schema, fields, sizeof(fields));
+
+	schema_member_desc_t members[] = {
+		{RELA_DYN_SECTION_OFFSET, 8},
+		{RELA_DYN_SECTION_TYPE, 4},
+		{RELA_DYN_SECTION_BIND, 4},
+		{RELA_DYN_SECTION_ADDEND, 8},
+		{RELA_DYN_SECTION_NAME, 0},
+	};
+
+	schema_add_layout(&tbl->schema, members, sizeof(members), NULL);
+
+	schema_member_desc_t members32[] = {
+		{RELA_DYN_SECTION_OFFSET, 4},
+		{RELA_DYN_SECTION_TYPE, 2},
+		{RELA_DYN_SECTION_BIND, 2},
+		{RELA_DYN_SECTION_ADDEND, 4},
+	};
+
+	schema_add_layout(&tbl->schema, members32, sizeof(members32), NULL);
+
+	schema_member_desc_t members64[] = {
+		{RELA_DYN_SECTION_OFFSET, 8},
+		{RELA_DYN_SECTION_TYPE, 4},
+		{RELA_DYN_SECTION_BIND, 4},
+		{RELA_DYN_SECTION_ADDEND, 8},
+	};
+
+	schema_add_layout(&tbl->schema, members64, sizeof(members64), NULL);
+	tbl_init_rows(tbl, 16, ALLOC_STD);
+
+	uint layout;
+	switch (class) {
+	case ELF_IDENT_CLASS_32: layout = 1; break;
+	case ELF_IDENT_CLASS_64: layout = 2; break;
+	default: return 1;
+	}
+
+	size_t end = *off + size;
+	while (*off < end) {
+		void *data = tbl_add_row(tbl, NULL);
+		read_layout(bin, off, &tbl->schema, layout, data);
+	}
+
+	tbl_map(tbl, RELA_DYN_SECTION_BIND, RELA_DYN_SECTION_NAME, map_rela_dyn_name, (void *)dynsym);
+
+	return 0;
+}
+
+static int read_elf_header(bin_t *bin, size_t *off, asmc_t *asmc, dst_t linker)
 {
 	dputf(DST_STD(), "[ELF IDENT]\n");
 	schema_t elf_ident_schema = {0};
@@ -1757,16 +2244,80 @@ static int read_elf_header(bin_t *bin, size_t *off, arr_t *instructions)
 
 	tbl_t ph_tbl = {0};
 	read_program_header(bin, *class, *phnum, *phoff, *phentsize, &ph_tbl);
-	dputf(DST_STD(), "[Program headers]\n");
+	dputf(DST_STD(), "\n[Program headers]\n");
 	tbl_print(&ph_tbl, DST_STD());
 
 	tbl_t sh_tbl = {0};
 	read_section_header(bin, *class, *shnum, *shoff, *shentsize, *shstrndx, &sh_tbl);
-	dputf(DST_STD(), "[Section headers]\n");
+	dputf(DST_STD(), "\n[Section headers]\n");
 	tbl_print(&sh_tbl, DST_STD());
+
+	dputf(linker,
+	      "SECTIONS\n"
+	      "{\n");
 
 	byte *row;
 	uint i = 0;
+	row_foreach(&sh_tbl, i, row)
+	{
+		const size_t *name_off = schema_get_val(&sh_tbl.schema, SECTION_HEADER_NAME, row);
+		strv_t name	       = strvbuf_get(&sh_tbl.strs, *name_off);
+		if (name.len > 0) {
+			const u64 *offset = schema_get_val(&sh_tbl.schema, SECTION_HEADER_OFFSET, row);
+			dputf(linker,
+			      "\t. = 0x%x;\n"
+			      "\t%.*s : {\n"
+			      "\t\t*(%.*s)\n"
+			      "\t}\n",
+			      *offset,
+			      name.len,
+			      name.data,
+			      name.len,
+			      name.data);
+		}
+	}
+	dputf(linker, "}\n");
+
+	u64 dynstr_off;
+
+	i = 0;
+	row_foreach(&sh_tbl, i, row)
+	{
+		const u32 *type = schema_get_val(&sh_tbl.schema, SECTION_HEADER_TYPE, row);
+		if (*type == SECTION_HEADER_TYPE_STRTAB) {
+			const size_t *name_off = schema_get_val(&sh_tbl.schema, SECTION_HEADER_NAME, row);
+			strv_t name	       = strvbuf_get(&sh_tbl.strs, *name_off);
+			if (strv_eq(name, STRV(".dynstr"))) {
+				const u64 *offset = schema_get_val(&sh_tbl.schema, SECTION_HEADER_OFFSET, row);
+				dynstr_off	  = *offset;
+				break;
+			}
+		}
+	}
+
+	tbl_t dynsym_tbl = {0};
+
+	i = 0;
+	row_foreach(&sh_tbl, i, row)
+	{
+		const u32 *type = schema_get_val(&sh_tbl.schema, SECTION_HEADER_TYPE, row);
+		if (*type == SECTION_HEADER_TYPE_DYNSYM) {
+			const size_t *name_off = schema_get_val(&sh_tbl.schema, SECTION_HEADER_NAME, row);
+			strv_t name	       = strvbuf_get(&sh_tbl.strs, *name_off);
+			if (strv_eq(name, STRV(".dynsym"))) {
+				const u64 *size	  = schema_get_val(&sh_tbl.schema, SECTION_HEADER_SIZE, row);
+				const u64 *offset = schema_get_val(&sh_tbl.schema, SECTION_HEADER_OFFSET, row);
+				u64 tmp		  = *offset;
+				read_dynsym_section(bin, *size, *class, dynstr_off, &dynsym_tbl, &tmp);
+				dputf(DST_STD(), "\n[.dynsym]\n");
+				tbl_print(&dynsym_tbl, DST_STD());
+			}
+		}
+	}
+
+	tbl_t reladyn_tbl = {0};
+
+	i = 0;
 	row_foreach(&sh_tbl, i, row)
 	{
 		const size_t *name_off = schema_get_val(&sh_tbl.schema, SECTION_HEADER_NAME, row);
@@ -1777,47 +2328,162 @@ static int read_elf_header(bin_t *bin, size_t *off, arr_t *instructions)
 		strv_t name = strvbuf_get(&sh_tbl.strs, *name_off);
 		u64 tmp	    = *offset;
 
-		if (*type == SECTION_HEADER_TYPE_PROGBITS) {
+		switch (*type) {
+		case SECTION_HEADER_TYPE_PROGBITS: {
 			if (strv_eq(name, STRV(".init"))) {
-				dputf(DST_STD(), "[.init]\n");
-				instruction_t *instruction = arr_add(instructions, NULL);
-				instruction->opcode	   = OP_SECTION;
-				instruction->str	   = ".init";
-				instruction		   = arr_add(instructions, NULL);
-				instruction->opcode	   = OP_GLOBAL;
-				instruction->str	   = "_init";
-				instruction		   = arr_add(instructions, NULL);
-				instruction->opcode	   = OP_LABEL;
-				instruction->str	   = "_init";
-				read_program_data(bin, *size, *data, instructions, &tmp);
+				dputf(DST_STD(), "\n[.init]\n");
+				asmc_op_t *op = arr_add(&asmc->ops, NULL);
+				op->type      = ASMC_OP_SECTION;
+				strvbuf_add(&asmc->strs, STRV(".init"), &op->str);
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_GLOBAL;
+				strvbuf_add(&asmc->strs, STRV("_init"), &op->str);
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, STRV("_init"), &op->str);
+				read_program_section(bin, *size, *data, asmc, &tmp);
+			} else if (strv_eq(name, STRV(".plt"))) {
+				dputf(DST_STD(), "\n[.plt]\n");
+				asmc_op_t *op = arr_add(&asmc->ops, NULL);
+				op->type      = ASMC_OP_SECTION;
+				strvbuf_add(&asmc->strs, STRV(".plt"), &op->str);
+				read_program_section(bin, *size, *data, asmc, &tmp);
+			} else if (strv_eq(name, STRV(".plt.got"))) {
+				dputf(DST_STD(), "\n[.plt.got]\n");
+				asmc_op_t *op = arr_add(&asmc->ops, NULL);
+				op->type      = ASMC_OP_SECTION;
+				strvbuf_add(&asmc->strs, STRV(".plt.got"), &op->str);
+				read_program_section(bin, *size, *data, asmc, &tmp);
 			} else if (strv_eq(name, STRV(".text"))) {
-				dputf(DST_STD(), "[.text]\n");
-				instruction_t *instruction = arr_add(instructions, NULL);
-				instruction->opcode	   = OP_SECTION;
-				instruction->str	   = ".text";
-				instruction		   = arr_add(instructions, NULL);
-				instruction->opcode	   = OP_GLOBAL;
-				instruction->str	   = "_start";
-				instruction		   = arr_add(instructions, NULL);
-				instruction->opcode	   = OP_LABEL;
-				instruction->str	   = "_start";
-				read_program_data(bin, *size, *data, instructions, &tmp);
+				dputf(DST_STD(), "\n[.text]\n");
+				asmc_op_t *op = arr_add(&asmc->ops, NULL);
+				op->type      = ASMC_OP_SECTION;
+				strvbuf_add(&asmc->strs, STRV(".text"), &op->str);
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_GLOBAL;
+				strvbuf_add(&asmc->strs, STRV("_start"), &op->str);
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, STRV("_start"), &op->str);
+				read_program_section(bin, *size, *data, asmc, &tmp);
 			} else if (strv_eq(name, STRV(".fini"))) {
-				dputf(DST_STD(), "[.fini]\n");
-				instruction_t *instruction = arr_add(instructions, NULL);
-				instruction->opcode	   = OP_SECTION;
-				instruction->str	   = ".fini";
-				instruction		   = arr_add(instructions, NULL);
-				instruction->opcode	   = OP_GLOBAL;
-				instruction->str	   = "_fini";
-				instruction		   = arr_add(instructions, NULL);
-				instruction->opcode	   = OP_LABEL;
-				instruction->str	   = "_fini";
-				read_program_data(bin, *size, *data, instructions, &tmp);
+				dputf(DST_STD(), "\n[.fini]\n");
+				asmc_op_t *op = arr_add(&asmc->ops, NULL);
+				op->type      = ASMC_OP_SECTION;
+				strvbuf_add(&asmc->strs, STRV(".fini"), &op->str);
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_GLOBAL;
+				strvbuf_add(&asmc->strs, STRV("_fini"), &op->str);
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, STRV("_fini"), &op->str);
+				read_program_section(bin, *size, *data, asmc, &tmp);
 			}
+			break;
+		}
+		case SECTION_HEADER_TYPE_DYNAMIC: {
+			if (strv_eq(name, STRV(".dynamic"))) {
+				tbl_t dyn_tbl = {0};
+				read_dynamic_section(bin, *size, *class, &dyn_tbl, &tmp);
+				dputf(DST_STD(), "\n[.dynamic]\n");
+				tbl_print(&dyn_tbl, DST_STD());
+
+				const u64 *strtab = NULL;
+
+				byte *dyn_row;
+				uint j = 0;
+				row_foreach(&dyn_tbl, j, dyn_row)
+				{
+					const u64 *tag = tbl_get_cell(&dyn_tbl, j, DYNAMIC_SECTION_TAG);
+					if (*tag == DYNAMIC_TAG_STRTAB) {
+						strtab = tbl_get_cell(&dyn_tbl, j, DYNAMIC_SECTION_VAL);
+						break;
+					}
+				}
+
+				j = 0;
+				row_foreach(&dyn_tbl, j, dyn_row)
+				{
+					const u64 *tag = tbl_get_cell(&dyn_tbl, j, DYNAMIC_SECTION_TAG);
+
+					switch (*tag) {
+					case DYNAMIC_TAG_NEEDED: {
+						const u64 *val	 = tbl_get_cell(&dyn_tbl, j, DYNAMIC_SECTION_VAL);
+						const char *name = &((char *)bin->buf.data)[*strtab + *val];
+						dputf(DST_STD(), "Needed: %s\n", name);
+						break;
+					}
+					}
+				}
+
+				tbl_free(&dyn_tbl);
+			}
+			break;
+		}
+		case SECTION_HEADER_TYPE_RELA: {
+			if (strv_eq(name, STRV(".rela.dyn"))) {
+				read_rela_dyn_section(bin, *size, *class, &dynsym_tbl, &reladyn_tbl, &tmp);
+				dputf(DST_STD(), "\n[.rela.dyn]\n");
+				tbl_print(&reladyn_tbl, DST_STD());
+			}
+			break;
+		}
+		default: {
+			break;
+		}
 		}
 	}
 
+	i = 0;
+	asmc_op_t *op;
+	arr_foreach(&asmc->ops, i, op)
+	{
+		switch (op->type) {
+		case ASMC_OP_PUSH_RIP:
+		case ASMC_OP_JMP_RIP:
+		case ASMC_OP_CALL_RIP: {
+			u64 address = op->addr + 6 + op->d;
+			byte *row;
+			uint i = 0;
+			row_foreach(&sh_tbl, i, row)
+			{
+				const u64 *sec_addr = tbl_get_cell(&sh_tbl, i, SECTION_HEADER_ADDRESS);
+				const u64 *sec_size = tbl_get_cell(&sh_tbl, i, SECTION_HEADER_SIZE);
+
+				if (address >= *sec_addr && address < *sec_addr + *sec_size) {
+					const size_t *sec_name_off = tbl_get_cell(&sh_tbl, i, SECTION_HEADER_NAME);
+					strv_t sec_name		   = strvbuf_get(&sh_tbl.strs, *sec_name_off);
+					if (strv_eq(sec_name, STRV(".got"))) {
+						op->off = address - *sec_addr;
+						strvbuf_add(&asmc->strs, STRV("_GLOBAL_OFFSET_TABLE_"), &op->str);
+						op->str_off = 0;
+					}
+				}
+			}
+
+			i = 0;
+			row_foreach(&reladyn_tbl, i, row)
+			{
+				const u64 *offset = tbl_get_cell(&reladyn_tbl, i, RELA_DYN_SECTION_OFFSET);
+				if (address == *offset) {
+					const size_t *name_off = tbl_get_cell(&reladyn_tbl, i, RELA_DYN_SECTION_NAME);
+					strv_t name	       = strvbuf_get(&reladyn_tbl.strs, *name_off);
+					if (name.len > 0) {
+						op->off = 0;
+						strvbuf_add(&asmc->strs, name, &op->str);
+						op->str_off = 0;
+					}
+				}
+			}
+
+			break;
+		}
+		default: break;
+		}
+	}
+
+	tbl_free(&reladyn_tbl);
+	tbl_free(&dynsym_tbl);
 	tbl_free(&sh_tbl);
 	tbl_free(&ph_tbl);
 	mem_free(elf, schema_get_layout(&elf_schema, 0)->size);
@@ -1828,7 +2494,7 @@ static int read_elf_header(bin_t *bin, size_t *off, arr_t *instructions)
 	return 0;
 }
 
-static int file(fs_t *fs, strv_t path, arr_t *instructions)
+static int file(fs_t *fs, strv_t path, asmc_t *asmc, dst_t linker)
 {
 	int ret = 0;
 
@@ -1841,7 +2507,7 @@ static int file(fs_t *fs, strv_t path, arr_t *instructions)
 	if (bin_cmp(&file, 0, magic, sizeof(magic)) == 0) {
 		log_info("reverse", "main", NULL, "Format: Executable and Linkable Format");
 		size_t off = 4;
-		ret |= read_elf_header(&file, &off, instructions);
+		ret |= read_elf_header(&file, &off, asmc, linker);
 	} else {
 		log_info("reverse", "main", NULL, "Format: Unknown");
 	}
@@ -1850,92 +2516,20 @@ static int file(fs_t *fs, strv_t path, arr_t *instructions)
 	return ret;
 }
 
-static int print_reg(reg_t reg)
+static const char *reg_src(asmc_reg_type_t reg)
 {
 	switch (reg) {
-	case REG_EAX: {
-		dputf(DST_STD(), "EAX");
-		break;
-	}
-	case REG_ECX: {
-		dputf(DST_STD(), "ECX");
-		break;
-	}
-	case REG_EBP: {
-		dputf(DST_STD(), "EBP");
-		break;
-	}
-	case REG_RAX: {
-		dputf(DST_STD(), "RAX");
-		break;
-	}
-	case REG_RCX: {
-		dputf(DST_STD(), "RCX");
-		break;
-	}
-	case REG_RDX: {
-		dputf(DST_STD(), "RDX");
-		break;
-	}
-	case REG_RSP: {
-		dputf(DST_STD(), "RSP");
-		break;
-	}
-	case REG_RBP: {
-		dputf(DST_STD(), "RBP");
-		break;
-	}
-	case REG_RSI: {
-		dputf(DST_STD(), "RSI");
-		break;
-	}
-	case REG_RDI: {
-		dputf(DST_STD(), "RDI");
-		break;
-	}
-	case REG_R8: {
-		dputf(DST_STD(), "R8");
-		break;
-	}
-	case REG_R9: {
-		dputf(DST_STD(), "R9");
-		break;
-	}
-	default: {
-		log_error("reverse", "main", NULL, "unknown register: %02X", reg);
-		break;
-	}
-	}
-
-	return 0;
-}
-
-static int print_val8(u8 val)
-{
-	dputf(DST_STD(), "0x%02X", val);
-	return 0;
-}
-
-static int print_val32(u32 val)
-{
-	dputf(DST_STD(), "0x%08X", val);
-	return 0;
-}
-
-static const char *reg_src(reg_t reg)
-{
-	switch (reg) {
-	case REG_EAX: return "eax";
-	case REG_ECX: return "ecx";
-	case REG_EBP: return "ebp";
-	case REG_RAX: return "rax";
-	case REG_RDX: return "rdx";
-	case REG_RSP: return "rsp";
-	case REG_RBP: return "rbp";
-	case REG_RSI: return "rsi";
-	case REG_RDI: return "rdi";
-	case REG_R8: return "r8d";
-	case REG_R9: return "r9";
+	case ASMC_REG_EAX: return "eax";
+	case ASMC_REG_ECX: return "ecx";
+	case ASMC_REG_EBP: return "ebp";
+	case ASMC_REG_RAX: return "rax";
+	case ASMC_REG_RDX: return "rdx";
+	case ASMC_REG_RSP: return "rsp";
+	case ASMC_REG_RBP: return "rbp";
+	case ASMC_REG_RSI: return "rsi";
+	case ASMC_REG_RDI: return "rdi";
+	case ASMC_REG_R8: return "r8d";
+	case ASMC_REG_R9: return "r9";
 	default: break;
 	}
 	return NULL;
@@ -1953,9 +2547,11 @@ int main(int argc, const char **argv)
 	log_add_callback(log_std_cb, DST_STD(), LOG_INFO, 1, 1);
 
 	strv_t path = STRV("./examples/printf/bin/host-Debug/bin/printf");
+	int out	    = 0;
 
 	opt_t opts[] = {
 		OPT('f', "file", OPT_STR, "<path>", "Specify file path", &path, {0}, OPT_OPT),
+		OPT('o', "out", OPT_BOOL, "<out>", "Generate output", &out, {0}, OPT_OPT),
 	};
 
 	if (args_parse(argc, argv, opts, sizeof(opts), DST_STD())) {
@@ -1968,403 +2564,244 @@ int main(int argc, const char **argv)
 	fs_init(&fs, 0, 0, ALLOC_STD);
 
 	if (fs_isfile(&fs, path)) {
-		arr_t instructions = {0};
-		arr_init(&instructions, 16, sizeof(instruction_t), ALLOC_STD);
+		asmc_t asmc = {0};
+		asmc_init(&asmc, 128, ALLOC_STD);
 
-		file(&fs, path, &instructions);
-
-		dputf(DST_STD(), "[instructions]\n");
-		uint i = 0;
-		instruction_t *instruction;
-		arr_foreach(&instructions, i, instruction)
-		{
-			switch (instruction->opcode) {
-			case OP_SECTION: {
-				dputf(DST_STD(), ".section %s\n", instruction->str);
-				break;
-			}
-			case OP_GLOBAL: {
-				dputf(DST_STD(), ".global %s\n", instruction->str);
-				break;
-			}
-			case OP_LABEL: {
-				dputf(DST_STD(), "%s:\n", instruction->str);
-				break;
-			}
-			case OP_NOP: {
-				dputf(DST_STD(), "NOP ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_NOP8: {
-				dputf(DST_STD(), "NOP ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_val8(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_NOP32: {
-				dputf(DST_STD(), "NOP ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_val32(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_SYSCALL: {
-				dputf(DST_STD(), "syscall\n");
-				break;
-			}
-			case OP_ENDBR64: {
-				dputf(DST_STD(), "endbr64\n");
-				break;
-			}
-			case OP_ADD_REG: {
-				dputf(DST_STD(), "ADD ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_reg(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_ADD_IMM: {
-				dputf(DST_STD(), "ADD ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_val8(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_SUB_REG: {
-				dputf(DST_STD(), "SUB ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_reg(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_SUB_IMM: {
-				dputf(DST_STD(), "SUB ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_val8(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_XOR: {
-				dputf(DST_STD(), "XOR ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_reg(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_CMP: {
-				dputf(DST_STD(), "CMP ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_reg(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_CMP_IMM: {
-				dputf(DST_STD(), "CMP [RIP+");
-				print_val32(instruction->d);
-				dputf(DST_STD(), "] ");
-				print_val8(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_PUSH: {
-				dputf(DST_STD(), "PUSH ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_POP: {
-				dputf(DST_STD(), "POP ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_JE: {
-				dputf(DST_STD(), "JE ");
-				print_val8(instruction->d);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_JNE: {
-				dputf(DST_STD(), "JNE ");
-				print_val8(instruction->d);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_AND: {
-				dputf(DST_STD(), "AND ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_val8(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_TEST: {
-				dputf(DST_STD(), "TEST ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_reg(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_MOV_REG: {
-				dputf(DST_STD(), "MOV ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_reg(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_MOV_RIP: {
-				dputf(DST_STD(), "MOV ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " [RIP+");
-				print_val32(instruction->s);
-				dputf(DST_STD(), "]\n");
-				break;
-			}
-			case OP_MOV_IMM8: {
-				dputf(DST_STD(), "MOV ");
-				dputf(DST_STD(), " [RIP+");
-				print_val32(instruction->d);
-				dputf(DST_STD(), "] ");
-				print_val8(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_MOV_IMM: {
-				dputf(DST_STD(), "MOV ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_val32(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_LEA: {
-				dputf(DST_STD(), "LEA ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " [RIP+");
-				print_val32(instruction->s);
-				dputf(DST_STD(), "]\n");
-				break;
-			}
-			case OP_SHR: {
-				dputf(DST_STD(), "SHR ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_val8(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_SAR: {
-				dputf(DST_STD(), "SAR ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), " ");
-				print_val8(instruction->s);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_RET: {
-				dputf(DST_STD(), "RET\n");
-				break;
-			}
-			case OP_HLT: {
-				dputf(DST_STD(), "HLT\n");
-				break;
-			}
-			case OP_CALL_REG: {
-				dputf(DST_STD(), "CALL ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_CALL_RIP: {
-				dputf(DST_STD(), "CALL [RIP+");
-				print_val32(instruction->d);
-				dputf(DST_STD(), "]\n");
-				break;
-			}
-			case OP_CALL_REL: {
-				dputf(DST_STD(), "CALL .+");
-				print_val32(instruction->d);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_JMP_REG: {
-				dputf(DST_STD(), "JMP ");
-				print_reg(instruction->d);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			case OP_JMP_IMM: {
-				dputf(DST_STD(), "JMP ");
-				print_val32(instruction->d);
-				dputf(DST_STD(), "\n");
-				break;
-			}
-			default: {
-				log_error("reverse", "main", NULL, "unknown opcode: %02X", instruction->opcode);
-				break;
-			}
-			}
-		}
-
-		if (!fs_isdir(&fs, STRV("out"))) {
-			fs_mkdir(&fs, STRV("out"));
-		}
-
-		void *src;
-		fs_open(&fs, STRV("out/main.c"), "w", &src);
-		dst_t dst = DST_FS(&fs, src);
-
-		dputf(dst, "__asm__(\n");
-		i = 0;
-		arr_foreach(&instructions, i, instruction)
-		{
-			dputf(dst, "\t\"");
-			switch (instruction->opcode) {
-			case OP_SECTION: {
-				dputf(dst, ".section %s", instruction->str);
-				break;
-			}
-			case OP_GLOBAL: {
-				dputf(dst, ".global %s", instruction->str);
-				break;
-			}
-			case OP_LABEL: {
-				dputf(dst, "%s:", instruction->str);
-				break;
-			}
-			case OP_SYSCALL: {
-				dputf(dst, "syscall");
-				break;
-			}
-			case OP_ENDBR64: {
-				dputf(dst, "endbr64");
-				break;
-			}
-			case OP_ADD_IMM: {
-				dputf(dst, "add $0x%x, %%%s", instruction->s, reg_src(instruction->d));
-				break;
-			}
-			case OP_SUB_IMM: {
-				dputf(dst, "sub $0x%x, %%%s", instruction->s, reg_src(instruction->d));
-				break;
-			}
-			case OP_XOR: {
-				dputf(dst, "xor %%%s, %%%s", reg_src(instruction->s), reg_src(instruction->d));
-				break;
-			}
-			case OP_PUSH: {
-				dputf(dst, "push %%%s", reg_src(instruction->d));
-				break;
-			}
-			case OP_POP: {
-				dputf(dst, "pop %%%s", reg_src(instruction->d));
-				break;
-			}
-			case OP_JE: {
-				dputf(dst, "je .+0x%x", 2 + instruction->d);
-				break;
-			}
-			case OP_AND: {
-				dputf(dst, "and $%d, %%%s", (s8)instruction->s, reg_src(instruction->d));
-				break;
-			}
-			case OP_TEST: {
-				dputf(dst, "test %%%s, %%%s", reg_src(instruction->s), reg_src(instruction->d));
-				break;
-			}
-			case OP_MOV_REG: {
-				dputf(dst, "mov %%%s, %%%s", reg_src(instruction->s), reg_src(instruction->d));
-				break;
-			}
-			case OP_MOV_RIP: {
-				dputf(dst, "mov 0x%x(%%rip), %%%s", instruction->s, reg_src(instruction->d));
-				break;
-			}
-			case OP_MOV_IMM: {
-				dputf(dst, "mov $%d, %%%s", instruction->s, reg_src(instruction->d));
-				break;
-			}
-			case OP_LEA: {
-				dputf(dst, "lea 0x%x(%%rip), %%%s", instruction->s, reg_src(instruction->d));
-				break;
-			}
-			case OP_RET: {
-				dputf(dst, "ret");
-				break;
-			}
-			case OP_CALL_REG: {
-				dputf(dst, "call *%%%s", reg_src(instruction->d));
-				break;
-			}
-			case OP_CALL_RIP: {
-				dputf(dst, "call 0x%x(%%rip)", instruction->d);
-				break;
-			}
-			case OP_CALL_REL: {
-				dputf(dst, "call .+%d", (s32)instruction->d);
-				break;
-			}
-			default: {
-				log_error("reverse", "main", NULL, "unsupported op: %d", instruction->opcode);
-				break;
-			}
-			}
-			dputf(dst, "\\n\"\n");
-		}
-
-		dputf(dst, ");\n");
-		fs_close(&fs, src);
-
+		dst_t linkerd;
 		void *linker;
-		fs_open(&fs, STRV("out/linker.ld"), "w", &linker);
-		dst = DST_FS(&fs, linker);
-		dputf(dst,
-		      "SECTIONS\n"
-		      "{\n"
-		      "\t. = 0x400000;\n"
-		      "\n"
-		      "\t.text : {\n"
-		      "\t\t*(.text*)\n"
-		      "\t}\n"
-		      "\n"
-		      "\t.init : {\n"
-		      "\t\t__init_start = .;\n"
-		      "\t\t*(.init)\n"
-		      "\t\t__init_end = .;\n"
-		      "\t}\n"
-		      "\n"
-		      "\t.fini : {\n"
-		      "\t\t__fini_start = .;\n"
-		      "\t\t*(.fini)\n"
-		      "\t\t__fini_end = .;\n"
-		      "\t}\n"
-		      "}\n");
-
-		fs_close(&fs, src);
-
-		proc_t proc = {0};
-		proc_init(&proc, 0, 0);
-		// if (proc_cmd(&proc, STRV("gcc -nostdlib -static -Wl,-Tout/linker.ld out/main.c -o out/main")) == 0) {
-		if (proc_cmd(&proc, STRV("gcc -nostdlib out/main.c -o out/main")) == 0) {
-			proc_cmd(&proc, STRV("objdump -wd out/main"));
-			proc_cmd(&proc, STRV("./out/main"));
+		if (out) {
+			if (!fs_isdir(&fs, STRV("out"))) {
+				fs_mkdir(&fs, STRV("out"));
+			}
+			fs_open(&fs, STRV("out/linker.ld"), "w", &linker);
+			linkerd = DST_FS(&fs, linker);
+		} else {
+			linkerd = DST_NONE();
 		}
-		proc_free(&proc);
+		file(&fs, path, &asmc, linkerd);
+		if (out) {
+			fs_close(&fs, linker);
+		}
 
-		arr_free(&instructions);
+		dputf(DST_STD(), "\n[code]\n");
+		asmc_dbg(&asmc, DST_STD());
+
+		if (out) {
+			void *src;
+			fs_open(&fs, STRV("out/main.c"), "w", &src);
+			dst_t dst = DST_FS(&fs, src);
+
+			dputf(dst,
+		      "__asm__(\n"
+		      /*"\t\".section .dynstr\\n\"\n"
+		      "\t\"dynstr_start:\\n\"\n"
+		      "\t\"libc_str:\\n\"\n"
+		      "\t\"    .string \\\"libc.so.6\\\"\\n\"\n"
+		      "\t\"\\n\"\n"
+		      "\t\".section .dynamic\\n\"\n"
+		      "\t\"    .quad 1\\n\"\n"
+		      "\t\"    .quad libc_str - dynstr_start\\n\"\n"
+		      "\t\"\\n\"\n"
+		      "\t\"    .quad 0\\n\"\n"
+		      "\t\"    .quad 0\\n\"\n"*/);
+			asmc_op_t *op;
+			uint i = 0;
+			arr_foreach(&asmc.ops, i, op)
+			{
+				dputf(dst, "\t\"");
+				switch (op->type) {
+				case ASMC_OP_SECTION: {
+					strv_t str = strvbuf_get(&asmc.strs, op->str);
+					dputf(dst, ".section %.*s", str.len, str.data);
+					break;
+				}
+				case ASMC_OP_GLOBAL: {
+					strv_t str = strvbuf_get(&asmc.strs, op->str);
+					dputf(dst, ".global %.*s", str.len, str.data);
+					break;
+				}
+				case ASMC_OP_LABEL: {
+					strv_t str = strvbuf_get(&asmc.strs, op->str);
+					dputf(dst, "%.*s:", str.len, str.data);
+					break;
+				}
+				case ASMC_OP_NOP: {
+					for (u64 i = 0; i < op->d; i++) {
+						if (i > 0) {
+							dputf(dst, "\\n\"\n");
+							dputf(dst, "\t\"");
+						}
+						dputf(dst, "nop");
+					}
+					break;
+				}
+				case ASMC_OP_SYSCALL: {
+					dputf(dst, "syscall");
+					break;
+				}
+				case ASMC_OP_ENDBR64: {
+					dputf(dst, "endbr64");
+					break;
+				}
+				case ASMC_OP_ADD_REG: {
+					dputf(dst, "add %%%s, %%%s", reg_src(op->s), reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_ADD_IMM: {
+					dputf(dst, "add $0x%x, %%%s", op->s, reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_SUB_REG: {
+					dputf(dst, "sub %%%s, %%%s", reg_src(op->s), reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_SUB_IMM: {
+					dputf(dst, "sub $0x%x, %%%s", op->s, reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_XOR: {
+					dputf(dst, "xor %%%s, %%%s", reg_src(op->s), reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_CMP_REG: {
+					dputf(dst, "cmp %%%s, %%%s", reg_src(op->s), reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_CMP_IMM8: {
+					dputf(dst, "cmpb $0x%x, 0x%x(%%rip)", op->s, op->d);
+					break;
+				}
+				case ASMC_OP_CMP_IMM32: {
+					dputf(dst, "cmpq $0x%x, 0x%x(%%rip)", op->s, op->d);
+					break;
+				}
+				case ASMC_OP_PUSH: {
+					dputf(dst, "push %%%s", reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_PUSH_RIP: {
+					if (op->str_off) {
+						strv_t str = strvbuf_get(&asmc.strs, op->str);
+						dputf(dst, "push %.*s+0x%x(%%rip)", str.len, str.data, op->off);
+					} else {
+						dputf(dst, "push 0x%x(%%rip)", op->d);
+					}
+					break;
+				}
+				case ASMC_OP_POP: {
+					dputf(dst, "pop %%%s", reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_JE: {
+					dputf(dst, "je .+0x%x", 2 + op->d);
+					break;
+				}
+				case ASMC_OP_JNE: {
+					dputf(dst, "jne .+0x%x", 2 + op->d);
+					break;
+				}
+				case ASMC_OP_AND: {
+					dputf(dst, "and $%d, %%%s", (s8)op->s, reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_TEST: {
+					dputf(dst, "test %%%s, %%%s", reg_src(op->s), reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_MOV_REG: {
+					dputf(dst, "mov %%%s, %%%s", reg_src(op->s), reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_MOV_RIP: {
+					dputf(dst, "mov 0x%x(%%rip), %%%s", op->s, reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_MOV_IMM8: {
+					dputf(dst, "movb $0x%x, 0x%x(%%rip)", op->s, op->d);
+					break;
+				}
+				case ASMC_OP_MOV_IMM: {
+					dputf(dst, "mov $%d, %%%s", op->s, reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_LEA: {
+					s32 val = op->s;
+					dputf(dst, "lea %s0x%x(%%rip), %%%s", val < 0 ? "-" : "", val < 0 ? -val : val, reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_SHR: {
+					dputf(dst, "shr $0x%x, %%%s", op->s, reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_SAR: {
+					dputf(dst, "sar $0x%x, %%%s", op->s, reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_RET: {
+					dputf(dst, "ret");
+					break;
+				}
+				case ASMC_OP_HLT: {
+					dputf(dst, "hlt");
+					break;
+				}
+				case ASMC_OP_CALL_REG: {
+					dputf(dst, "call *%%%s", reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_CALL_RIP: {
+					if (op->str_off) {
+						strv_t str = strvbuf_get(&asmc.strs, op->str);
+						dputf(dst, "call *%.*s+0x%x(%%rip)", str.len, str.data, op->off);
+					} else {
+						dputf(dst, "call *0x%x(%%rip)", op->d);
+					}
+					break;
+				}
+				case ASMC_OP_CALL_REL: {
+					dputf(dst, "call .+%d", 5 + (s32)op->d);
+					break;
+				}
+				case ASMC_OP_JMP_REG: {
+					dputf(dst, "jmp *%%%s", reg_src(op->d));
+					break;
+				}
+				case ASMC_OP_JMP_RIP: {
+					if (op->str_off) {
+						strv_t str = strvbuf_get(&asmc.strs, op->str);
+						dputf(dst, "jmp *%.*s+0x%x(%%rip)", str.len, str.data, op->off);
+					} else {
+						dputf(dst, "jmp *0x%x(%%rip)", op->d);
+					}
+					break;
+				}
+				case ASMC_OP_JMP_REL: {
+					dputf(dst, "jmp .+%d", 5 + op->d);
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unsupported op: %d", op->type);
+					break;
+				}
+				}
+				dputf(dst, "\\n\"\n");
+			}
+
+			dputf(dst, ");\n");
+			fs_close(&fs, src);
+
+			proc_t proc = {0};
+			proc_init(&proc, 0, 0);
+			if (proc_cmd(&proc,
+				     STRV("gcc -Os -s -nostdlib -Wl,-Tout/linker.ld out/main.c -o out/main && patchelf --add-needed "
+					  "libc.so.6 "
+					  "out/main")) == 0) {
+				proc_cmd(&proc, STRV("objdump -whd out/main"));
+				proc_cmd(&proc, STRV("./out/main"));
+			}
+			proc_free(&proc);
+		}
+		asmc_free(&asmc);
 	} else {
 		log_error("reverse", "main", NULL, "File does not exist: %.*s", (int)path.len, path.data);
 		ret = 1;
