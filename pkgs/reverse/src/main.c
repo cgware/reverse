@@ -537,6 +537,7 @@ enum {
 	X86_OP_MOV_REG	     = 0x89,
 	X86_OP_MOV_RIP	     = 0x8B,
 	X86_OP_LEA	     = 0x8D,
+	X86_OP_NOP	     = 0x90,
 	X86_OP_MOV_EAX	     = 0xB8,
 	X86_OP_SHR_SAR	     = 0xC1,
 	X86_OP_RET	     = 0xC3,
@@ -1082,6 +1083,21 @@ static int read_program_section(bin_t *bin, u64 size, elf_ident_data_t data, asm
 			cet	= 0;
 			rex	= 0;
 			rep	= 0;
+			break;
+		}
+		case X86_OP_NOP: { // NOP (One byte no-operation instruction)
+			dputf(DST_STD(), "NOP\n");
+			if (rex || op_size || cs || cet || rep) {
+				log_error("reverse", "main", NULL, "prefix was not expected");
+			}
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_NOP;
+			op->d	      = 1;
+			op_size	      = 0;
+			cs	      = 0;
+			cet	      = 0;
+			rex	      = 0;
+			rep	      = 0;
 			break;
 		}
 		case X86_OP_MOV_EAX: { // MOV r32, imm32 (Move imm32 to r32)
@@ -2038,6 +2054,22 @@ enum {
 	DYNSYM_BIND_WEAK,
 };
 
+static int read_dynstr_section(bin_t *bin, u64 size, size_t *off)
+{
+	size_t start = *off;
+	while (*off < start + size) {
+		dputf(DST_STD(), "0x%08X ", *off - start);
+		byte *b = bin_get(bin, 1, off);
+		while (*b) {
+			dputf(DST_STD(), "%c", *b);
+			b = bin_get(bin, 1, off);
+		};
+		dputf(DST_STD(), "\n");
+	}
+
+	return 0;
+}
+
 static int read_dynsym_section(bin_t *bin, u64 size, elf_ident_class_t class, u64 dynstr_off, tbl_t *tbl, size_t *off)
 {
 	static const schema_val_t types[] = {
@@ -2289,7 +2321,11 @@ static int read_elf_header(bin_t *bin, size_t *off, asmc_t *asmc, dst_t linker)
 			strv_t name	       = strvbuf_get(&sh_tbl.strs, *name_off);
 			if (strv_eq(name, STRV(".dynstr"))) {
 				const u64 *offset = schema_get_val(&sh_tbl.schema, SECTION_HEADER_OFFSET, row);
+				const u64 *size	  = schema_get_val(&sh_tbl.schema, SECTION_HEADER_SIZE, row);
 				dynstr_off	  = *offset;
+				dputf(DST_STD(), "\n[.dynstr]\n");
+				u64 tmp = *offset;
+				read_dynstr_section(bin, *size, &tmp);
 				break;
 			}
 		}
@@ -2593,12 +2629,100 @@ int main(int argc, const char **argv)
 
 			dputf(dst,
 		      "__asm__(\n"
-		      /*"\t\".section .dynstr\\n\"\n"
+		      "\t\".section .dynstr\\n\"\n"
 		      "\t\"dynstr_start:\\n\"\n"
-		      "\t\"libc_str:\\n\"\n"
-		      "\t\"    .string \\\"libc.so.6\\\"\\n\"\n"
+		       "\t\"    .byte 0x00\\n\"\n"
+		      "\t\"__cxa_finalize_str:\\n\"\n"
+		      "\t\"    .string \\\"__cxa_finalize\\\"\\n\"\n"
+		      "\t\"__libc_start_main_str:\\n\"\n"
+		      "\t\"    .string \\\"__libc_start_main\\\"\\n\"\n"
+		      "\t\"GLIBC_2_2_5_str:\\n\"\n"
+		      "\t\"    .string \\\"GLIBC_2.2.5\\\"\\n\"\n"
+		      "\t\"GLIBC_2_34:\\n\"\n"
+		      "\t\"    .string \\\"GLIBC_2.34\\\"\\n\"\n"
+		      "\t\"_ITM_deregisterTMCloneTable_str:\\n\"\n"
+		      "\t\"    .string \\\"_ITM_deregisterTMCloneTable\\\"\\n\"\n"
+		      "\t\"__gmon_start___str:\\n\"\n"
+		      "\t\"    .string \\\"__gmon_start__\\\"\\n\"\n"
+		      "\t\"_ITM_registerTMCloneTable_str:\\n\"\n"
+		      "\t\"    .string \\\"_ITM_registerTMCloneTable\\\"\\n\"\n"
 		      "\t\"\\n\"\n"
-		      "\t\".section .dynamic\\n\"\n"
+		      "\t\".section .dynsym\\n\"\n"
+		      "\t\"    .long __libc_start_main_str - dynstr_start\\n\"\n" //name
+		      "\t\"    .byte 0x12\\n\"\n" // info
+		      "\t\"    .byte 0x00\\n\"\n" // other
+		      "\t\"    .word 0x00\\n\"\n" // index
+		      "\t\"    .quad 0x00\\n\"\n" // value
+		      "\t\"    .quad 0x00\\n\"\n" // size
+		      "\t\"    .long _ITM_deregisterTMCloneTable_str - dynstr_start\\n\"\n" //name
+		      "\t\"    .byte 0x20\\n\"\n" // info
+		      "\t\"    .byte 0x00\\n\"\n" // other
+		      "\t\"    .word 0x00\\n\"\n" // index
+		      "\t\"    .quad 0x00\\n\"\n" // value
+		      "\t\"    .quad 0x00\\n\"\n" // size
+		      "\t\"    .long __gmon_start___str - dynstr_start\\n\"\n" //name
+		      "\t\"    .byte 0x20\\n\"\n" // info
+		      "\t\"    .byte 0x00\\n\"\n" // other
+		      "\t\"    .word 0x00\\n\"\n" // index
+		      "\t\"    .quad 0x00\\n\"\n" // value
+		      "\t\"    .quad 0x00\\n\"\n" // size
+		      "\t\"    .long _ITM_registerTMCloneTable_str - dynstr_start\\n\"\n" //name
+		      "\t\"    .byte 0x20\\n\"\n" // info
+		      "\t\"    .byte 0x00\\n\"\n" // other
+		      "\t\"    .word 0x00\\n\"\n" // index
+		      "\t\"    .quad 0x00\\n\"\n" // value
+		      "\t\"    .quad 0x00\\n\"\n" // size
+		      "\t\"    .long __cxa_finalize_str - dynstr_start\\n\"\n" //name
+		      "\t\"    .byte 0x22\\n\"\n" // info
+		      "\t\"    .byte 0x00\\n\"\n" // other
+		      "\t\"    .word 0x00\\n\"\n" // index
+		      "\t\"    .quad 0x00\\n\"\n" // value
+		      "\t\"    .quad 0x00\\n\"\n" // size
+		      "\t\"\\n\"\n"
+		      "\t\".section .rela.dyn\\n\"\n"
+		      "\t\"    .quad 0x3DF0\\n\"\n" // offset
+		      "\t\"    .long 0x8\\n\"\n" // type
+		      "\t\"    .long 0x5\\n\"\n" // bind
+		      "\t\"    .quad 0x1130\\n\"\n" // addend
+		      "\t\"    .quad 0x3DF8\\n\"\n" // offset
+		      "\t\"    .long 0x8\\n\"\n" // type
+		      "\t\"    .long 0x5\\n\"\n" // bind
+		      "\t\"    .quad 0x10F0\\n\"\n" // addend
+		      "\t\"    .quad 0x4008\\n\"\n" // offset
+		      "\t\"    .long 0x8\\n\"\n" // type
+		      "\t\"    .long 0x5\\n\"\n" // bind
+		      "\t\"    .quad 0x4008\\n\"\n" // addend
+		      "\t\"    .quad 0x3FD8\\n\"\n" // offset
+		      "\t\"    .long 0x6\\n\"\n" // type
+		      "\t\"    .long 0x0\\n\"\n" // bind
+		      "\t\"    .quad 0x0\\n\"\n" // addend
+		      "\t\"    .quad 0x3FE0\\n\"\n" // offset
+		      "\t\"    .long 0x6\\n\"\n" // type
+		      "\t\"    .long 0x1\\n\"\n" // bind
+		      "\t\"    .quad 0x0\\n\"\n" // addend
+		      "\t\"    .quad 0x3FE8\\n\"\n" // offset
+		      "\t\"    .long 0x6\\n\"\n" // type
+		      "\t\"    .long 0x2\\n\"\n" // bind
+		      "\t\"    .quad 0x0\\n\"\n" // addend
+		      "\t\"    .quad 0x3FF0\\n\"\n" // offset
+		      "\t\"    .long 0x6\\n\"\n" // type
+		      "\t\"    .long 0x3\\n\"\n" // bind
+		      "\t\"    .quad 0x0\\n\"\n" // addend
+		      "\t\"    .quad 0x3FF8\\n\"\n" // offset
+		      "\t\"    .long 0x6\\n\"\n" // type
+		      "\t\"    .long 0x4\\n\"\n" // bind
+		      "\t\"    .quad 0x0\\n\"\n" // addend
+		      "\t\"\\n\"\n"
+
+
+/*
+		{RELA_DYN_SECTION_OFFSET, 8},
+		{RELA_DYN_SECTION_TYPE, 4},
+		{RELA_DYN_SECTION_BIND, 4},
+		{RELA_DYN_SECTION_ADDEND, 8},
+*/
+
+		      /*"\t\".section .dynamic\\n\"\n"
 		      "\t\"    .quad 1\\n\"\n"
 		      "\t\"    .quad libc_str - dynstr_start\\n\"\n"
 		      "\t\"\\n\"\n"
@@ -2771,7 +2895,7 @@ int main(int argc, const char **argv)
 						strv_t str = strvbuf_get(&asmc.strs, op->str);
 						dputf(dst, "jmp *%.*s+0x%x(%%rip)", str.len, str.data, op->off);
 					} else {
-						dputf(dst, "jmp *0x%x(%%rip)", op->d);
+						dputf(dst, "bnd jmp *0x%x(%%rip)", op->d);
 					}
 					break;
 				}
@@ -2794,8 +2918,8 @@ int main(int argc, const char **argv)
 			proc_init(&proc, 0, 0);
 			if (proc_cmd(&proc,
 				     STRV("gcc -Os -s -nostdlib -Wl,-Tout/linker.ld out/main.c -o out/main && patchelf --add-needed "
-					  "libc.so.6 "
-					  "out/main")) == 0) {
+					  "libc.so.6 out/main")) == 0) {
+				// STRV("gcc -Os -s -nostdlib -Wl,-Tout/linker.ld out/main.c -o out/main")) == 0) {
 				proc_cmd(&proc, STRV("objdump -whd out/main"));
 				proc_cmd(&proc, STRV("./out/main"));
 			}
