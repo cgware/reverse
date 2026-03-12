@@ -1,5 +1,7 @@
+#include "alloc.h"
 #include "args.h"
 #include "asmc.h"
+#include "elfc.h"
 #include "fs.h"
 #include "log.h"
 #include "mem.h"
@@ -2165,8 +2167,10 @@ enum {
 	RELA_DYN_SECTION_NAME,
 };
 
-#define R_X86_64_GLOB_DAT 6
-#define R_X86_64_RELATIVE 8
+enum {
+	R_X86_64_GLOB_DAT = 6,
+	R_X86_64_RELATIVE = 8,
+};
 
 static int map_rela_dyn_name(tbl_t *tbl, uint row, uint col, const void *data, void *priv)
 {
@@ -2552,25 +2556,6 @@ static int file(fs_t *fs, strv_t path, asmc_t *asmc, dst_t linker)
 	return ret;
 }
 
-static const char *reg_src(asmc_reg_type_t reg)
-{
-	switch (reg) {
-	case ASMC_REG_EAX: return "eax";
-	case ASMC_REG_ECX: return "ecx";
-	case ASMC_REG_EBP: return "ebp";
-	case ASMC_REG_RAX: return "rax";
-	case ASMC_REG_RDX: return "rdx";
-	case ASMC_REG_RSP: return "rsp";
-	case ASMC_REG_RBP: return "rbp";
-	case ASMC_REG_RSI: return "rsi";
-	case ASMC_REG_RDI: return "rdi";
-	case ASMC_REG_R8: return "r8d";
-	case ASMC_REG_R9: return "r9";
-	default: break;
-	}
-	return NULL;
-}
-
 int main(int argc, const char **argv)
 {
 	mem_stats_t mem_stats = {0};
@@ -2600,34 +2585,37 @@ int main(int argc, const char **argv)
 	fs_init(&fs, 0, 0, ALLOC_STD);
 
 	if (fs_isfile(&fs, path)) {
+		elfc_t elfc = {0};
+		elfc_init(&elfc, ALLOC_STD);
+
+		elfc_read(&elfc, &fs, path);
+
 		asmc_t asmc = {0};
 		asmc_init(&asmc, 128, ALLOC_STD);
+		log_info("reverse", "elfc", NULL, "Generating ASM");
+		elfc_asmc(&elfc, &asmc);
 
-		dst_t linkerd;
-		void *linker;
+		elfc_free(&elfc);
+
+		(void)file;
+		// dst_t linkerd = DST_NONE();
+		// file(&fs, path, &asmc, linkerd);
+		// asmc.ops.cnt = 0;
+
+		// dputf(DST_STD(), "\n[code]\n");
+		// asmc_dbg(&asmc, DST_STD());
+
 		if (out) {
 			if (!fs_isdir(&fs, STRV("out"))) {
 				fs_mkdir(&fs, STRV("out"));
 			}
-			fs_open(&fs, STRV("out/linker.ld"), "w", &linker);
-			linkerd = DST_FS(&fs, linker);
-		} else {
-			linkerd = DST_NONE();
-		}
-		file(&fs, path, &asmc, linkerd);
-		if (out) {
-			fs_close(&fs, linker);
-		}
 
-		dputf(DST_STD(), "\n[code]\n");
-		asmc_dbg(&asmc, DST_STD());
-
-		if (out) {
-			void *src;
+			/*void *src;
 			fs_open(&fs, STRV("out/main.c"), "w", &src);
 			dst_t dst = DST_FS(&fs, src);
+			dputf(dst, "__asm__(\n");*/
 
-			dputf(dst,
+			/*dputf(dst,
 		      "__asm__(\n"
 		      "\t\".section .dynstr\\n\"\n"
 		      "\t\"dynstr_start:\\n\"\n"
@@ -2712,218 +2700,51 @@ int main(int argc, const char **argv)
 		      "\t\"    .long 0x6\\n\"\n" // type
 		      "\t\"    .long 0x4\\n\"\n" // bind
 		      "\t\"    .quad 0x0\\n\"\n" // addend
-		      "\t\"\\n\"\n"
+		      "\t\"\\n\"\n");*/
 
-
-/*
-		{RELA_DYN_SECTION_OFFSET, 8},
-		{RELA_DYN_SECTION_TYPE, 4},
-		{RELA_DYN_SECTION_BIND, 4},
-		{RELA_DYN_SECTION_ADDEND, 8},
-*/
-
-		      /*"\t\".section .dynamic\\n\"\n"
-		      "\t\"    .quad 1\\n\"\n"
-		      "\t\"    .quad libc_str - dynstr_start\\n\"\n"
-		      "\t\"\\n\"\n"
-		      "\t\"    .quad 0\\n\"\n"
-		      "\t\"    .quad 0\\n\"\n"*/);
-			asmc_op_t *op;
-			uint i = 0;
-			arr_foreach(&asmc.ops, i, op)
-			{
-				dputf(dst, "\t\"");
-				switch (op->type) {
-				case ASMC_OP_SECTION: {
-					strv_t str = strvbuf_get(&asmc.strs, op->str);
-					dputf(dst, ".section %.*s", str.len, str.data);
-					break;
-				}
-				case ASMC_OP_GLOBAL: {
-					strv_t str = strvbuf_get(&asmc.strs, op->str);
-					dputf(dst, ".global %.*s", str.len, str.data);
-					break;
-				}
-				case ASMC_OP_LABEL: {
-					strv_t str = strvbuf_get(&asmc.strs, op->str);
-					dputf(dst, "%.*s:", str.len, str.data);
-					break;
-				}
-				case ASMC_OP_NOP: {
-					for (u64 i = 0; i < op->d; i++) {
-						if (i > 0) {
-							dputf(dst, "\\n\"\n");
-							dputf(dst, "\t\"");
-						}
-						dputf(dst, "nop");
-					}
-					break;
-				}
-				case ASMC_OP_SYSCALL: {
-					dputf(dst, "syscall");
-					break;
-				}
-				case ASMC_OP_ENDBR64: {
-					dputf(dst, "endbr64");
-					break;
-				}
-				case ASMC_OP_ADD_REG: {
-					dputf(dst, "add %%%s, %%%s", reg_src(op->s), reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_ADD_IMM: {
-					dputf(dst, "add $0x%x, %%%s", op->s, reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_SUB_REG: {
-					dputf(dst, "sub %%%s, %%%s", reg_src(op->s), reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_SUB_IMM: {
-					dputf(dst, "sub $0x%x, %%%s", op->s, reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_XOR: {
-					dputf(dst, "xor %%%s, %%%s", reg_src(op->s), reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_CMP_REG: {
-					dputf(dst, "cmp %%%s, %%%s", reg_src(op->s), reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_CMP_IMM8: {
-					dputf(dst, "cmpb $0x%x, 0x%x(%%rip)", op->s, op->d);
-					break;
-				}
-				case ASMC_OP_CMP_IMM32: {
-					dputf(dst, "cmpq $0x%x, 0x%x(%%rip)", op->s, op->d);
-					break;
-				}
-				case ASMC_OP_PUSH: {
-					dputf(dst, "push %%%s", reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_PUSH_RIP: {
-					if (op->str_off) {
-						strv_t str = strvbuf_get(&asmc.strs, op->str);
-						dputf(dst, "push %.*s+0x%x(%%rip)", str.len, str.data, op->off);
-					} else {
-						dputf(dst, "push 0x%x(%%rip)", op->d);
-					}
-					break;
-				}
-				case ASMC_OP_POP: {
-					dputf(dst, "pop %%%s", reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_JE: {
-					dputf(dst, "je .+0x%x", 2 + op->d);
-					break;
-				}
-				case ASMC_OP_JNE: {
-					dputf(dst, "jne .+0x%x", 2 + op->d);
-					break;
-				}
-				case ASMC_OP_AND: {
-					dputf(dst, "and $%d, %%%s", (s8)op->s, reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_TEST: {
-					dputf(dst, "test %%%s, %%%s", reg_src(op->s), reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_MOV_REG: {
-					dputf(dst, "mov %%%s, %%%s", reg_src(op->s), reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_MOV_RIP: {
-					dputf(dst, "mov 0x%x(%%rip), %%%s", op->s, reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_MOV_IMM8: {
-					dputf(dst, "movb $0x%x, 0x%x(%%rip)", op->s, op->d);
-					break;
-				}
-				case ASMC_OP_MOV_IMM: {
-					dputf(dst, "mov $%d, %%%s", op->s, reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_LEA: {
-					s32 val = op->s;
-					dputf(dst, "lea %s0x%x(%%rip), %%%s", val < 0 ? "-" : "", val < 0 ? -val : val, reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_SHR: {
-					dputf(dst, "shr $0x%x, %%%s", op->s, reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_SAR: {
-					dputf(dst, "sar $0x%x, %%%s", op->s, reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_RET: {
-					dputf(dst, "ret");
-					break;
-				}
-				case ASMC_OP_HLT: {
-					dputf(dst, "hlt");
-					break;
-				}
-				case ASMC_OP_CALL_REG: {
-					dputf(dst, "call *%%%s", reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_CALL_RIP: {
-					if (op->str_off) {
-						strv_t str = strvbuf_get(&asmc.strs, op->str);
-						dputf(dst, "call *%.*s+0x%x(%%rip)", str.len, str.data, op->off);
-					} else {
-						dputf(dst, "call *0x%x(%%rip)", op->d);
-					}
-					break;
-				}
-				case ASMC_OP_CALL_REL: {
-					dputf(dst, "call .+%d", 5 + (s32)op->d);
-					break;
-				}
-				case ASMC_OP_JMP_REG: {
-					dputf(dst, "jmp *%%%s", reg_src(op->d));
-					break;
-				}
-				case ASMC_OP_JMP_RIP: {
-					if (op->str_off) {
-						strv_t str = strvbuf_get(&asmc.strs, op->str);
-						dputf(dst, "jmp *%.*s+0x%x(%%rip)", str.len, str.data, op->off);
-					} else {
-						dputf(dst, "bnd jmp *0x%x(%%rip)", op->d);
-					}
-					break;
-				}
-				case ASMC_OP_JMP_REL: {
-					dputf(dst, "jmp .+%d", 5 + op->d);
-					break;
-				}
-				default: {
-					log_error("reverse", "main", NULL, "unsupported op: %d", op->type);
-					break;
-				}
-				}
-				dputf(dst, "\\n\"\n");
-			}
-
-			dputf(dst, ");\n");
+			void *src;
+			fs_open(&fs, STRV("out/main.s"), "w", &src);
+			asmc_print(&asmc, DST_FS(&fs, src));
 			fs_close(&fs, src);
 
 			proc_t proc = {0};
 			proc_init(&proc, 0, 0);
-			if (proc_cmd(&proc,
-				     STRV("gcc -Os -s -nostdlib -Wl,-Tout/linker.ld out/main.c -o out/main && patchelf --add-needed "
-					  "libc.so.6 out/main")) == 0) {
-				// STRV("gcc -Os -s -nostdlib -Wl,-Tout/linker.ld out/main.c -o out/main")) == 0) {
-				proc_cmd(&proc, STRV("objdump -whd out/main"));
+			/*if (proc_cmd(&proc,
+				     //     STRV("gcc -Os -s -nostdlib -Wl,-Tout/linker.ld out/main.c -o out/main && patchelf
+			--add-needed "
+					//       "libc.so.6 out/main")) == 0) {
+				     // STRV("gcc -Os -s -nostdlib -Wl,-Tout/linker.ld out/main.c -o out/main")) == 0) {
+				     //  STRV("gcc -nostdlib -static -s -c out/main.c -o out/main.o && ld -n -static out/main.o -o
+			out/main
+				     //  && strip -R .data -R .bss -R .comment -R .note.GNU-stack -R .note.gnu.property out/main"))
+			== 0) {
+				     //STRV("gcc -nostdlib -ffreestanding -fno-ident -fno-asynchronous-unwind-tables
+			-fno-unwind-tables -fno-stack-protector -Wl,-Tout/linker.ld -Wl,--oformat=binary -Wl,--build-id=none
+			out/main.c -o out/main")) == 0) {
+				//proc_cmd(&proc, STRV("objdump -whd out/main"));
 				proc_cmd(&proc, STRV("./out/main"));
+			}*/
+
+			log_info("reverse", "main", NULL, "Generating OBJ");
+
+			if (proc_cmd(&proc, STRV("as out/main.s -o out/main.o"))) {
+				return 1;
 			}
+
+			log_info("reverse", "main", NULL, "Generating ELF");
+
+			if (proc_cmd(&proc, STRV("ld out/main.o -o out/main.elf"))) {
+				return 1;
+			}
+			log_info("reverse", "main", NULL, "Generating BIN");
+
+			if (proc_cmd(&proc, STRV("objcopy -O binary out/main.elf out/main"))) {
+				return 1;
+			}
+
 			proc_free(&proc);
+
+			log_info("revertse", "main", NULL, "Done");
 		}
 		asmc_free(&asmc);
 	} else {

@@ -89,6 +89,22 @@ size_t asmc_dbg(const asmc_t *asmc, dst_t dst)
 			dst.off += dputf(dst, "%.*s:\n", str.len, str.data);
 			break;
 		}
+		case ASMC_OP_BYTE: {
+			dst.off += dputf(dst, ".byte 0x%02x\n", op->d);
+			break;
+		}
+		case ASMC_OP_WORD: {
+			dst.off += dputf(dst, ".word 0x%04x\n", op->d);
+			break;
+		}
+		case ASMC_OP_LONG: {
+			dst.off += dputf(dst, ".long 0x%08x\n", op->d);
+			break;
+		}
+		case ASMC_OP_QUAD: {
+			dst.off += dputf(dst, ".quad 0x%016x\n", op->d);
+			break;
+		}
 		case ASMC_OP_NOP: {
 			dst.off += dputf(dst, "NOP(%d)\n", op->d);
 			break;
@@ -329,6 +345,230 @@ size_t asmc_dbg(const asmc_t *asmc, dst_t dst)
 			break;
 		}
 		}
+	}
+
+	return dst.off - off;
+}
+
+static const char *reg_src(asmc_reg_type_t reg)
+{
+	switch (reg) {
+	case ASMC_REG_EAX: return "eax";
+	case ASMC_REG_ECX: return "ecx";
+	case ASMC_REG_EBP: return "ebp";
+	case ASMC_REG_RAX: return "rax";
+	case ASMC_REG_RDX: return "rdx";
+	case ASMC_REG_RSP: return "rsp";
+	case ASMC_REG_RBP: return "rbp";
+	case ASMC_REG_RSI: return "rsi";
+	case ASMC_REG_RDI: return "rdi";
+	case ASMC_REG_R8: return "r8d";
+	case ASMC_REG_R9: return "r9";
+	default: break;
+	}
+	return NULL;
+}
+
+size_t asmc_print(const asmc_t *asmc, dst_t dst)
+{
+	if (asmc == NULL) {
+		return 0;
+	}
+
+	size_t off = dst.off;
+
+	uint i = 0;
+	asmc_op_t *op;
+	arr_foreach(&asmc->ops, i, op)
+	{
+		switch (op->type) {
+		case ASMC_OP_SECTION: {
+			strv_t str = strvbuf_get(&asmc->strs, op->str);
+			dst.off += dputf(dst, ".section %.*s", str.len, str.data);
+			break;
+		}
+		case ASMC_OP_GLOBAL: {
+			strv_t str = strvbuf_get(&asmc->strs, op->str);
+			dst.off += dputf(dst, ".global %.*s", str.len, str.data);
+			break;
+		}
+		case ASMC_OP_LABEL: {
+			strv_t str = strvbuf_get(&asmc->strs, op->str);
+			dst.off += dputf(dst, "%.*s:", str.len, str.data);
+			break;
+		}
+		case ASMC_OP_BYTE: {
+			dst.off += dputf(dst, "\t.byte 0x%02x", op->d);
+			break;
+		}
+		case ASMC_OP_WORD: {
+			dst.off += dputf(dst, "\t.word 0x%04x", op->d);
+			break;
+		}
+		case ASMC_OP_LONG: {
+			dst.off += dputf(dst, "\t.long 0x%08x", op->d);
+			break;
+		}
+		case ASMC_OP_QUAD: {
+			dst.off += dputf(dst, "\t.quad 0x%016x", op->d);
+			break;
+		}
+		case ASMC_OP_NOP: {
+			for (u64 i = 0; i < op->d; i++) {
+				dst.off += dputf(dst, "\tnop");
+			}
+			break;
+		}
+		case ASMC_OP_SYSCALL: {
+			dst.off += dputf(dst, "\tsyscall");
+			break;
+		}
+		case ASMC_OP_ENDBR64: {
+			dst.off += dputf(dst, "\tendbr64");
+			break;
+		}
+		case ASMC_OP_ADD_REG: {
+			dst.off += dputf(dst, "\tadd %%%s, %%%s", reg_src(op->s), reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_ADD_IMM: {
+			dst.off += dputf(dst, "\tadd $0x%x, %%%s", op->s, reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_SUB_REG: {
+			dst.off += dputf(dst, "\tsub %%%s, %%%s", reg_src(op->s), reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_SUB_IMM: {
+			dst.off += dputf(dst, "\tsub $0x%x, %%%s", op->s, reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_XOR: {
+			dst.off += dputf(dst, "\txor %%%s, %%%s", reg_src(op->s), reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_CMP_REG: {
+			dst.off += dputf(dst, "\tcmp %%%s, %%%s", reg_src(op->s), reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_CMP_IMM8: {
+			dst.off += dputf(dst, "\tcmpb $0x%x, 0x%x(%%rip)", op->s, op->d);
+			break;
+		}
+		case ASMC_OP_CMP_IMM32: {
+			dst.off += dputf(dst, "\tcmpq $0x%x, 0x%x(%%rip)", op->s, op->d);
+			break;
+		}
+		case ASMC_OP_PUSH: {
+			dst.off += dputf(dst, "\tpush %%%s", reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_PUSH_RIP: {
+			if (op->str_off) {
+				strv_t str = strvbuf_get(&asmc->strs, op->str);
+				dst.off += dputf(dst, "\tpush %.*s+0x%x(%%rip)", str.len, str.data, op->off);
+			} else {
+				dst.off += dputf(dst, "\tpush 0x%x(%%rip)", op->d);
+			}
+			break;
+		}
+		case ASMC_OP_POP: {
+			dst.off += dputf(dst, "\tpop %%%s", reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_JE: {
+			dst.off += dputf(dst, "\tje .+0x%x", 2 + op->d);
+			break;
+		}
+		case ASMC_OP_JNE: {
+			dst.off += dputf(dst, "\tjne .+0x%x", 2 + op->d);
+			break;
+		}
+		case ASMC_OP_AND: {
+			dst.off += dputf(dst, "\tand $%d, %%%s", (s8)op->s, reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_TEST: {
+			dst.off += dputf(dst, "\ttest %%%s, %%%s", reg_src(op->s), reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_MOV_REG: {
+			dst.off += dputf(dst, "\tmov %%%s, %%%s", reg_src(op->s), reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_MOV_RIP: {
+			dst.off += dputf(dst, "\tmov 0x%x(%%rip), %%%s", op->s, reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_MOV_IMM8: {
+			dst.off += dputf(dst, "\tmovb $0x%x, 0x%x(%%rip)", op->s, op->d);
+			break;
+		}
+		case ASMC_OP_MOV_IMM: {
+			dst.off += dputf(dst, "\tmov $%d, %%%s", op->s, reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_LEA: {
+			s32 val = op->s;
+			dst.off += dputf(dst, "\tlea %s0x%x(%%rip), %%%s", val < 0 ? "-" : "", val < 0 ? -val : val, reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_SHR: {
+			dst.off += dputf(dst, "\tshr $0x%x, %%%s", op->s, reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_SAR: {
+			dst.off += dputf(dst, "\tsar $0x%x, %%%s", op->s, reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_RET: {
+			dst.off += dputf(dst, "\tret");
+			break;
+		}
+		case ASMC_OP_HLT: {
+			dst.off += dputf(dst, "\thlt");
+			break;
+		}
+		case ASMC_OP_CALL_REG: {
+			dst.off += dputf(dst, "\tcall *%%%s", reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_CALL_RIP: {
+			if (op->str_off) {
+				strv_t str = strvbuf_get(&asmc->strs, op->str);
+				dst.off += dputf(dst, "\tcall *%.*s+0x%x(%%rip)", str.len, str.data, op->off);
+			} else {
+				dst.off += dputf(dst, "\tcall *0x%x(%%rip)", op->d);
+			}
+			break;
+		}
+		case ASMC_OP_CALL_REL: {
+			dst.off += dputf(dst, "\tcall .+%d", 5 + (s32)op->d);
+			break;
+		}
+		case ASMC_OP_JMP_REG: {
+			dst.off += dputf(dst, "\tjmp *%%%s", reg_src(op->d));
+			break;
+		}
+		case ASMC_OP_JMP_RIP: {
+			if (op->str_off) {
+				strv_t str = strvbuf_get(&asmc->strs, op->str);
+				dst.off += dputf(dst, "\tjmp *%.*s+0x%x(%%rip)", str.len, str.data, op->off);
+			} else {
+				dst.off += dputf(dst, "\tbnd jmp *0x%x(%%rip)", op->d);
+			}
+			break;
+		}
+		case ASMC_OP_JMP_REL: {
+			dst.off += dputf(dst, "\tjmp .+%d", 5 + op->d);
+			break;
+		}
+		default: {
+			log_error("reverse", "main", NULL, "unsupported op: %d", op->type);
+			break;
+		}
+		}
+		dst.off += dputf(dst, "\n");
 	}
 
 	return dst.off - off;
