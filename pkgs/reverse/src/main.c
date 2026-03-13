@@ -1,5 +1,6 @@
 #include "alloc.h"
 #include "args.h"
+#include "arr.h"
 #include "asmc.h"
 #include "elfc.h"
 #include "fs.h"
@@ -2595,8 +2596,6 @@ int main(int argc, const char **argv)
 		log_info("reverse", "elfc", NULL, "Generating ASM");
 		elfc_asmc(&elfc, &asmc);
 
-		elfc_free(&elfc);
-
 		(void)file;
 		// dst_t linkerd = DST_NONE();
 		// file(&fs, path, &asmc, linkerd);
@@ -2702,10 +2701,41 @@ int main(int argc, const char **argv)
 		      "\t\"    .quad 0x0\\n\"\n" // addend
 		      "\t\"\\n\"\n");*/
 
-			void *src;
-			fs_open(&fs, STRV("out/main.s"), "w", &src);
-			asmc_print(&asmc, DST_FS(&fs, src));
-			fs_close(&fs, src);
+			void *f;
+			fs_open(&fs, STRV("out/main.s"), "w", &f);
+			asmc_print(&asmc, DST_FS(&fs, f));
+			fs_close(&fs, f);
+
+			fs_open(&fs, STRV("out/linker.ld"), "w", &f);
+			dst_t linker = DST_FS(&fs, f);
+			dputf(linker,
+			      "SECTIONS\n"
+			      "{\n");
+
+			byte *row;
+			uint i		  = 0;
+			elfc_sect_t *sect = arr_get(&elfc.sects, elfc.section_header);
+			row_foreach(&sect->data.section_header.tbl, i, row)
+			{
+				const size_t *name_off = tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_NAME);
+				strv_t name	       = strvbuf_get(&sect->data.section_header.tbl.strs, *name_off);
+				if (name.len > 0) {
+					const u64 *offset  = tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_OFFSET);
+					const u64 *address = tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_ADDRESS);
+					dputf(linker,
+					      "\t%.*s 0x%x : AT(0x%x) {\n"
+					      "\t\t*(%.*s)\n"
+					      "\t}\n",
+					      name.len,
+					      name.data,
+					      *address,
+					      *offset,
+					      name.len,
+					      name.data);
+				}
+			}
+			dputf(linker, "}\n");
+			fs_close(&fs, f);
 
 			proc_t proc = {0};
 			proc_init(&proc, 0, 0);
@@ -2733,19 +2763,20 @@ int main(int argc, const char **argv)
 
 			log_info("reverse", "main", NULL, "Generating ELF");
 
-			if (proc_cmd(&proc, STRV("ld out/main.o -o out/main.elf"))) {
+			if (proc_cmd(&proc, STRV("ld -Tout/linker.ld out/main.o -o out/main"))) {
 				return 1;
 			}
-			log_info("reverse", "main", NULL, "Generating BIN");
+			/*log_info("reverse", "main", NULL, "Generating BIN");
 
 			if (proc_cmd(&proc, STRV("objcopy -O binary out/main.elf out/main"))) {
 				return 1;
-			}
+			}*/
 
 			proc_free(&proc);
 
 			log_info("revertse", "main", NULL, "Done");
 		}
+		elfc_free(&elfc);
 		asmc_free(&asmc);
 	} else {
 		log_error("reverse", "main", NULL, "File does not exist: %.*s", (int)path.len, path.data);

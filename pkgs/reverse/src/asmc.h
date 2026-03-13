@@ -13,6 +13,7 @@ typedef enum asmc_op_type_e {
 	ASMC_OP_WORD,
 	ASMC_OP_LONG,
 	ASMC_OP_QUAD,
+	ASMC_OP_STRING,
 	ASMC_OP_NOP,
 	ASMC_OP_SYSCALL,
 	ASMC_OP_ENDBR64,

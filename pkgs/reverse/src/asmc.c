@@ -101,6 +101,11 @@ size_t asmc_dbg(const asmc_t *asmc, dst_t dst)
 			dst.off += dputf(dst, ".long 0x%08x\n", op->d);
 			break;
 		}
+		case ASMC_OP_STRING: {
+			strv_t str = strvbuf_get(&asmc->strs, op->str);
+			dst.off += dputf(dst, ".string \"%.*s\"\n", str.len, str.data);
+			break;
+		}
 		case ASMC_OP_QUAD: {
 			dst.off += dputf(dst, ".quad 0x%016x\n", op->d);
 			break;
@@ -411,6 +416,11 @@ size_t asmc_print(const asmc_t *asmc, dst_t dst)
 		}
 		case ASMC_OP_QUAD: {
 			dst.off += dputf(dst, "\t.quad 0x%016x", op->d);
+			break;
+		}
+		case ASMC_OP_STRING: {
+			strv_t str = strvbuf_get(&asmc->strs, op->str);
+			dst.off += dputf(dst, "\t.string \"%.*s\"", str.len, str.data);
 			break;
 		}
 		case ASMC_OP_NOP: {

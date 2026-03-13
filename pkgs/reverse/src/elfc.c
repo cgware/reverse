@@ -1,12 +1,15 @@
 #include "elfc.h"
 
 #include "arr.h"
+#include "asmc.h"
 #include "buf.h"
 #include "dst.h"
 #include "log.h"
 #include "mem.h"
 #include "schema.h"
 #include "str.h"
+#include "strbuf.h"
+#include "strv.h"
 #include "strvbuf.h"
 #include "tbl.h"
 
@@ -288,7 +291,7 @@ enum {
 	PROGRAM_HEADER_ALIGN,
 };
 
-static int parse_program_headers(elfc_t *elfc, u64 off, u8 class, u16 num, u16 size, elfc_sect_t *sect)
+static int parse_program_header(elfc_t *elfc, u64 off, u8 class, u16 num, u16 size, elfc_sect_t *sect)
 {
 	static const schema_val_t types[] = {
 		{PROGRAM_HEADER_TYPE_NULL, STRVT("NULL")},
@@ -382,6 +385,208 @@ static int parse_program_headers(elfc_t *elfc, u64 off, u8 class, u16 num, u16 s
 	return 0;
 }
 
+static int map_name(tbl_t *tbl, uint row, uint col, const void *data, void *priv)
+{
+	const char *section_names_offset = priv;
+
+	const u16 *off = data;
+
+	if (tbl_set_cell_str(tbl, row, col, 0, strv_cstr(&section_names_offset[*off]))) {
+		log_error("reverse", "elfc", NULL, "Failed to set name");
+		return 1;
+	}
+
+	return 0;
+}
+
+typedef enum section_header_type_e {
+	SECTION_HEADER_TYPE_NULL,
+	SECTION_HEADER_TYPE_PROGBITS,
+	SECTION_HEADER_TYPE_SYMTAB,
+	SECTION_HEADER_TYPE_STRTAB,
+	SECTION_HEADER_TYPE_RELA,
+	SECTION_HEADER_TYPE_HASH,
+	SECTION_HEADER_TYPE_DYNAMIC,
+	SECTION_HEADER_TYPE_NOTE,
+	SECTION_HEADER_TYPE_NOBITS,
+	SECTION_HEADER_TYPE_REL,
+	SECTION_HEADER_TYPE_SHLIB,
+	SECTION_HEADER_TYPE_DYNSYM,
+	SECTION_HEADER_TYPE_UNKNOWN_0,
+	SECTION_HEADER_TYPE_UNKNOWN_1,
+	SECTION_HEADER_TYPE_INIT_ARRAY,
+	SECTION_HEADER_TYPE_FINI_ARRAY,
+	__SECTION_HEADER_TYPE_CNT,
+} section_header_type_t;
+
+#define SECTION_HEADER_TYPE_GNU_HASH	0x6FFFFFF6
+#define SECTION_HEADER_TYPE_GNU_VERNEED 0x6FFFFFFE
+#define SECTION_HEADER_TYPE_GNU_VERSYM	0x6FFFFFFF
+
+typedef enum section_header_flag_e {
+	SECTION_HEADER_FLAG_WRITE,
+	SECTION_HEADER_FLAG_ALLOC,
+	SECTION_HEADER_FLAG_EXECINSTR,
+	SECTION_HEADER_FLAG_UNKNOWN,
+	SECTION_HEADER_FLAG_MERGE,
+	SECTION_HEADER_FLAG_STRINGS,
+	SECTION_HEADER_FLAG_INFO_LINK,
+	SECTION_HEADER_FLAG_LINK_ORDER,
+	__SECTION_HEADER_FLAG_CNT,
+} section_header_flag_t;
+
+enum {
+	SECTION_HEADER_NAME_OFF,
+	SECTION_HEADER_NAME,
+	SECTION_HEADER_TYPE,
+	SECTION_HEADER_FLAGS,
+	SECTION_HEADER_ADDR,
+	SECTION_HEADER_OFFSET,
+	SECTION_HEADER_SIZE,
+	SECTION_HEADER_LINK,
+	SECTION_HEADER_INFO,
+	SECTION_HEADER_ALIGN,
+	SECTION_HEADER_ENTSIZE,
+};
+
+static int parse_section_header(elfc_t *elfc, u64 off, u8 class, u16 num, u16 size, u16 shstrndx, elfc_sect_t *sect)
+{
+	static const schema_val_t types[] = {
+		{SECTION_HEADER_TYPE_NULL, STRVT("NULL")},
+		{SECTION_HEADER_TYPE_PROGBITS, STRVT("Program data")},
+		{SECTION_HEADER_TYPE_SYMTAB, STRVT("Symbol table")},
+		{SECTION_HEADER_TYPE_STRTAB, STRVT("String table")},
+		{SECTION_HEADER_TYPE_RELA, STRVT("Relocations (+A)")},
+		{SECTION_HEADER_TYPE_HASH, STRVT("Hash")},
+		{SECTION_HEADER_TYPE_DYNAMIC, STRVT("Dynamic")},
+		{SECTION_HEADER_TYPE_NOTE, STRVT("Notes")},
+		{SECTION_HEADER_TYPE_NOBITS, STRVT("bss")},
+		{SECTION_HEADER_TYPE_REL, STRVT("Relocations (-A)")},
+		{SECTION_HEADER_TYPE_SHLIB, STRVT("Shared library")},
+		{SECTION_HEADER_TYPE_DYNSYM, STRVT("Dynamic linker symbol")},
+		{SECTION_HEADER_TYPE_INIT_ARRAY, STRVT("Constructors")},
+		{SECTION_HEADER_TYPE_FINI_ARRAY, STRVT("Destructors")},
+		{SECTION_HEADER_TYPE_GNU_HASH, STRVT("GNU_HASH")},
+		{SECTION_HEADER_TYPE_GNU_VERNEED, STRVT("GNU_VERNEED")},
+		{SECTION_HEADER_TYPE_GNU_VERSYM, STRVT("GNU_VERSYM")},
+	};
+
+	static const schema_val_t flags[] = {
+		{SECTION_HEADER_FLAG_WRITE, STRVT("W")},
+		{SECTION_HEADER_FLAG_ALLOC, STRVT("A")},
+		{SECTION_HEADER_FLAG_EXECINSTR, STRVT("X")},
+		{SECTION_HEADER_FLAG_UNKNOWN, STRVT("U")},
+		{SECTION_HEADER_FLAG_MERGE, STRVT("M")},
+		{SECTION_HEADER_FLAG_STRINGS, STRVT("S")},
+		{SECTION_HEADER_FLAG_INFO_LINK, STRVT("I")},
+		{SECTION_HEADER_FLAG_LINK_ORDER, STRVT("L")},
+	};
+
+	schema_field_desc_t fields[] = {
+		[SECTION_HEADER_NAME_OFF] = {STRVT("Name"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_NAME]	  = {STRVT("Name"), 0, SCHEMA_TYPE_STR, NULL, 0},
+		[SECTION_HEADER_TYPE]	  = {STRVT("Type"), 4, SCHEMA_TYPE_ENUM, types, sizeof(types)},
+		[SECTION_HEADER_FLAGS]	  = {STRVT("Flags"), 8, SCHEMA_TYPE_FLAG, flags, sizeof(flags)},
+		[SECTION_HEADER_ADDR]	  = {STRVT("Address"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_OFFSET]	  = {STRVT("Offset"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_SIZE]	  = {STRVT("Size"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_LINK]	  = {STRVT("Link"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_INFO]	  = {STRVT("Info"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_ALIGN]	  = {STRVT("Align"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[SECTION_HEADER_ENTSIZE]  = {STRVT("Entry size"), 8, SCHEMA_TYPE_INT, NULL, 0},
+	};
+
+	tbl_init(&sect->data.section_header.tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 36, ALLOC_STD);
+	schema_add_fields(&sect->data.section_header.tbl.schema, fields, sizeof(fields));
+
+	schema_member_desc_t members[] = {
+		{SECTION_HEADER_NAME_OFF, 4},
+		{SECTION_HEADER_NAME, 0},
+		{SECTION_HEADER_TYPE, 4},
+		{SECTION_HEADER_FLAGS, 8},
+		{SECTION_HEADER_ADDR, 8},
+		{SECTION_HEADER_OFFSET, 8},
+		{SECTION_HEADER_SIZE, 8},
+		{SECTION_HEADER_LINK, 4},
+		{SECTION_HEADER_INFO, 4},
+		{SECTION_HEADER_ALIGN, 8},
+		{SECTION_HEADER_ENTSIZE, 8},
+	};
+
+	schema_add_layout(&sect->data.section_header.tbl.schema, members, sizeof(members), NULL);
+
+	schema_member_desc_t members32[] = {
+		{SECTION_HEADER_NAME_OFF, 4},
+		{SECTION_HEADER_TYPE, 4},
+		{SECTION_HEADER_FLAGS, 4},
+		{SECTION_HEADER_ADDR, 4},
+		{SECTION_HEADER_OFFSET, 4},
+		{SECTION_HEADER_SIZE, 4},
+		{SECTION_HEADER_LINK, 4},
+		{SECTION_HEADER_INFO, 4},
+		{SECTION_HEADER_ALIGN, 4},
+		{SECTION_HEADER_ENTSIZE, 4},
+	};
+
+	schema_add_layout(&sect->data.section_header.tbl.schema, members32, sizeof(members32), NULL);
+
+	schema_member_desc_t members64[] = {
+		{SECTION_HEADER_NAME_OFF, 4},
+		{SECTION_HEADER_TYPE, 4},
+		{SECTION_HEADER_FLAGS, 8},
+		{SECTION_HEADER_ADDR, 8},
+		{SECTION_HEADER_OFFSET, 8},
+		{SECTION_HEADER_SIZE, 8},
+		{SECTION_HEADER_LINK, 4},
+		{SECTION_HEADER_INFO, 4},
+		{SECTION_HEADER_ALIGN, 8},
+		{SECTION_HEADER_ENTSIZE, 8},
+	};
+
+	schema_add_layout(&sect->data.section_header.tbl.schema, members64, sizeof(members64), NULL);
+	tbl_init_rows(&sect->data.section_header.tbl, num, ALLOC_STD);
+
+	switch (class) {
+	case ELF_IDENT_CLASS_32: sect->data.section_header.layout = 1; break;
+	case ELF_IDENT_CLASS_64: sect->data.section_header.layout = 2; break;
+	default: return 1;
+	}
+
+	for (int i = 0; i < num; i++) {
+		size_t o   = off + (size * i);
+		void *data = tbl_add_row(&sect->data.section_header.tbl, NULL);
+		read_layout(&elfc->bin, &o, &sect->data.section_header.tbl.schema, sect->data.section_header.layout, data);
+	}
+
+	const u64 *offset = tbl_get_cell(&sect->data.section_header.tbl, shstrndx, SECTION_HEADER_OFFSET);
+
+	const char *section_names_offset = &((char *)elfc->bin.buf.data)[*offset];
+
+	tbl_map(&sect->data.section_header.tbl, SECTION_HEADER_NAME_OFF, SECTION_HEADER_NAME, map_name, (void *)section_names_offset);
+
+	return 0;
+}
+
+static int parse_strtab_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect)
+{
+	char *data = elfc->bin.buf.data;
+	arr_init(&sect->data.strtab.strs, size / 8 + 1, sizeof(size_t), ALLOC_STD);
+	u64 base = off;
+	while (off < base + size) {
+		u64 str_start = off;
+		while (data[off] != '\0') {
+			off++;
+		}
+		strv_t str = STRVN(&data[str_start], off - str_start);
+		dputf(DST_STD(), "0x%08X %.*s\n", str_start - base, str.len, str.data);
+		size_t *str_off = arr_add(&sect->data.strtab.strs, NULL);
+		strvbuf_add(&elfc->strs, str, str_off);
+		off++;
+	}
+
+	return 0;
+}
+
 int elfc_read(elfc_t *elfc, fs_t *fs, strv_t path)
 {
 	if (elfc == NULL) {
@@ -408,6 +613,7 @@ int elfc_read(elfc_t *elfc, fs_t *fs, strv_t path)
 	sect->addr = off;
 	bin_get(&elfc->bin, sizeof(magic), &off);
 	sect->size = off - sect->addr;
+	dputf(DST_STD(), "Magic: 0x%02X%02X%02X%02X\n", magic[0], magic[1], magic[2], magic[3]);
 
 	log_info("reverse", "elfc", NULL, "Parsing ELF IDENT");
 	sect	   = arr_add(&elfc->sects, NULL);
@@ -416,6 +622,8 @@ int elfc_read(elfc_t *elfc, fs_t *fs, strv_t path)
 	sect->addr = off;
 	parse_elf_ident(elfc, &off, sect);
 	sect->size = off - sect->addr;
+	dputf(DST_STD(), "[ELF IDENT]\n");
+	schema_print_data(&sect->data.elf_ident.schema, 0, sect->data.elf_ident.data, DST_STD());
 
 	u8 class = *(u8 *)schema_get_val(&sect->data.elf_ident.schema, ELF_IDENT_CLASS, sect->data.elf_ident.data);
 
@@ -426,18 +634,93 @@ int elfc_read(elfc_t *elfc, fs_t *fs, strv_t path)
 	sect->addr = off;
 	parse_elf_header(elfc, &off, class, sect);
 	sect->size = off - sect->addr;
+	dputf(DST_STD(), "[ELF header]\n");
+	schema_print_data(&sect->data.elf_header.schema, 0, sect->data.elf_header.data, DST_STD());
 
 	u16 phentsize = *(u16 *)schema_get_val(&sect->data.elf_header.schema, ELF_HEADER_PHENTSIZE, sect->data.elf_ident.data);
 	u16 phnum     = *(u16 *)schema_get_val(&sect->data.elf_header.schema, ELF_HEADER_PHNUM, sect->data.elf_ident.data);
 	u64 phoff     = *(u64 *)schema_get_val(&sect->data.elf_header.schema, ELF_HEADER_PHOFF, sect->data.elf_ident.data);
+	u16 shentsize = *(u16 *)schema_get_val(&sect->data.elf_header.schema, ELF_HEADER_SHENTSIZE, sect->data.elf_ident.data);
+	u16 shnum     = *(u16 *)schema_get_val(&sect->data.elf_header.schema, ELF_HEADER_SHNUM, sect->data.elf_ident.data);
+	u64 shoff     = *(u64 *)schema_get_val(&sect->data.elf_header.schema, ELF_HEADER_SHOFF, sect->data.elf_ident.data);
+	u16 shstrndx  = *(u16 *)schema_get_val(&sect->data.elf_header.schema, ELF_HEADER_SHSTRNDX, sect->data.elf_ident.data);
 
-	log_info("reverse", "elfc", NULL, "Parsing Program headers");
+	log_info("reverse", "elfc", NULL, "Parsing program header");
 	sect	   = arr_add(&elfc->sects, NULL);
-	sect->type = ELF_SECT_TYPE_PROGRAM_HEADERS;
-	strvbuf_add(&elfc->strs, STRV("program_headers"), &sect->label);
+	sect->type = ELF_SECT_TYPE_PROGRAM_HEADER;
+	strvbuf_add(&elfc->strs, STRV("program_header"), &sect->label);
 	sect->addr = phoff;
-	parse_program_headers(elfc, phoff, class, phnum, phentsize, sect);
+	parse_program_header(elfc, phoff, class, phnum, phentsize, sect);
 	sect->size = phentsize * phnum;
+	dputf(DST_STD(), "[Program header]\n");
+	tbl_print(&sect->data.program_header.tbl, DST_STD());
+
+	log_info("reverse", "elfc", NULL, "Parsing section header");
+	sect	   = arr_add(&elfc->sects, &elfc->section_header);
+	sect->type = ELF_SECT_TYPE_SECTION_HEADER;
+	strvbuf_add(&elfc->strs, STRV("section_header"), &sect->label);
+	sect->addr = shoff;
+	parse_section_header(elfc, shoff, class, shnum, shentsize, shstrndx, sect);
+	sect->size = shentsize * shnum;
+	dputf(DST_STD(), "[Section header]\n");
+	tbl_print(&sect->data.section_header.tbl, DST_STD());
+
+	log_info("reverse", "elfc", NULL, "Parsing sections");
+	uint section_header_cnt = sect->data.section_header.tbl.rows.cnt;
+
+	for (uint i = 0; i < section_header_cnt; i++) {
+		sect	 = arr_get(&elfc->sects, elfc->section_header);
+		u32 type = *(u32 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_TYPE);
+		switch (type) {
+		case SECTION_HEADER_TYPE_STRTAB: {
+			size_t name_off = *(size_t *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_NAME);
+			strv_t name	= strvbuf_get(&sect->data.section_header.tbl.strs, name_off);
+			u64 offset	= *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_OFFSET);
+			u64 size	= *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_SIZE);
+			/*if (strv_eq(name, STRV(".shstrtab"))) {
+				log_info("reverse", "elfc", NULL, "skpping: %.*s", name.len, name.data);
+				break;
+			}*/
+
+			sect	   = arr_add(&elfc->sects, NULL);
+			sect->type = ELF_SECT_TYPE_STRTAB;
+			strvbuf_add(&elfc->strs, name, &sect->label);
+			sect->addr = offset;
+			dputf(DST_STD(), "\n[%.*s]\n", name.len, name.data);
+			parse_strtab_section(elfc, offset, size, sect);
+			sect->size = size;
+			break;
+		}
+		default: {
+			size_t name_off = *(size_t *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_NAME);
+			strv_t name	= strvbuf_get(&sect->data.section_header.tbl.strs, name_off);
+			/*if (strv_eq(name, STRV(".bss"))) {
+				log_info("reverse", "elfc", NULL, "skpping: %.*s", name.len, name.data);
+				break;
+			}
+			if (strv_eq(name, STRV(".eh_frame"))) {
+				log_info("reverse", "elfc", NULL, "skpping: %.*s", name.len, name.data);
+				break;
+			}
+			if (strv_eq(name, STRV(".interp"))) {
+				log_info("reverse", "elfc", NULL, "skpping: %.*s", name.len, name.data);
+				break;
+			}*/
+			if (name.len > 0) {
+				u64 offset = *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_OFFSET);
+				u64 size   = *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_SIZE);
+
+				sect	   = arr_add(&elfc->sects, NULL);
+				sect->type = ELF_SECT_TYPE_SECTION;
+				strvbuf_add(&elfc->strs, name, &sect->label);
+				sect->addr = offset;
+				dputf(DST_STD(), "\n[%.*s]\n", name.len, name.data);
+				sect->size = size;
+			}
+			break;
+		}
+		}
+	}
 
 	return 0;
 }
@@ -455,7 +738,7 @@ static elfc_sect_t *find_sect(const elfc_t *elfc, u64 addr)
 
 	return NULL;
 }
-
+/*
 static int elfc_asmc_schema(asmc_t *asmc, const schema_t *schema, const strv_t *labels, void *data, uint layout, int multi, uint id)
 {
 	const schema_layout_t *l = schema_get_layout(schema, layout);
@@ -471,10 +754,10 @@ static int elfc_asmc_schema(asmc_t *asmc, const schema_t *schema, const strv_t *
 		if (multi) {
 			char tmp[32] = {0};
 			dst_t label  = DST_BUFN(tmp, sizeof(tmp));
-			label.off += dputf(label, "%.*s_%d", labels[i - l->members].len, labels[i - l->members].data, id);
+			label.off += dputf(label, "%.*s_%d", labels[m->field].len, labels[m->field].data, id);
 			strvbuf_add(&asmc->strs, STRVN(tmp, label.off), &op->str);
 		} else {
-			strvbuf_add(&asmc->strs, labels[i - l->members], &op->str);
+			strvbuf_add(&asmc->strs, labels[m->field], &op->str);
 		}
 
 		switch (m->size) {
@@ -551,6 +834,20 @@ static strv_t s_program_header_labels[] = {
 	[PROGRAM_HEADER_ALIGN]	= STRVT("program_header_align"),
 };
 
+static strv_t s_section_header_labels[] = {
+	[SECTION_HEADER_NAME_OFF] = STRVT("section_header_name"),
+	[SECTION_HEADER_NAME]	  = STRVT("section_header_name"),
+	[SECTION_HEADER_TYPE]	  = STRVT("section_header_type"),
+	[SECTION_HEADER_FLAGS]	  = STRVT("section_header_flags"),
+	[SECTION_HEADER_ADDR]	  = STRVT("section_header_addr"),
+	[SECTION_HEADER_OFFSET]	  = STRVT("section_header_offset"),
+	[SECTION_HEADER_SIZE]	  = STRVT("section_header_size"),
+	[SECTION_HEADER_LINK]	  = STRVT("section_header_link"),
+	[SECTION_HEADER_INFO]	  = STRVT("section_header_info"),
+	[SECTION_HEADER_ALIGN]	  = STRVT("section_header_align"),
+	[SECTION_HEADER_ENTSIZE]  = STRVT("section_header_entsize"),
+};
+*/
 int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 {
 	if (elfc == NULL || asmc == NULL) {
@@ -558,25 +855,19 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 	}
 
 	asmc_op_t *op;
-	op	 = arr_add(&asmc->ops, NULL);
-	op->type = ASMC_OP_GLOBAL;
-	strvbuf_add(&asmc->strs, STRV("_start"), &op->str);
-	op	 = arr_add(&asmc->ops, NULL);
-	op->type = ASMC_OP_LABEL;
-	strvbuf_add(&asmc->strs, STRV("_start"), &op->str);
 
-	char unknown_buf[32] = {0};
+	/*char unknown_buf[32] = {0};
 	dst_t unknown	     = DST_BUFN(unknown_buf, sizeof(unknown_buf));
 	unknown.off += dputf(unknown, "unknown_");
 	size_t unknown_len = unknown.off;
 	uint unknown_cnt   = 0;
-	int label	   = 0;
+	int label	   = 0;*/
 
 	u64 addr = 0;
 	while (addr < elfc->bin.buf.used) {
 		elfc_sect_t *sect = find_sect(elfc, addr);
 		if (sect == NULL) {
-			if (label == 0) {
+			/*if (label == 0) {
 				op	 = arr_add(&asmc->ops, NULL);
 				op->type = ASMC_OP_LABEL;
 				unknown.off += dputf(unknown, "%d", unknown_cnt);
@@ -588,49 +879,60 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 
 			op	 = arr_add(&asmc->ops, NULL);
 			op->type = ASMC_OP_BYTE;
-			op->d	 = *(byte *)buf_get(&elfc->bin.buf, addr);
+			op->d	 = *(byte *)buf_get(&elfc->bin.buf, addr);*/
 			addr++;
 		} else {
-			op	 = arr_add(&asmc->ops, NULL);
-			op->type = ASMC_OP_LABEL;
-			strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
-
 			switch (sect->type) {
 			case ELF_SECT_TYPE_BYTES: {
+				/*op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
 				for (uint off = 0; off < sect->size; off++) {
 					op	 = arr_add(&asmc->ops, NULL);
 					op->type = ASMC_OP_BYTE;
-					op->d	 = *(u32 *)buf_get(&elfc->bin.buf, sect->addr + off);
-				}
+					op->d	 = *(u8 *)buf_get(&elfc->bin.buf, sect->addr + off);
+				}*/
 				break;
 			}
 			case ELF_SECT_TYPE_MAGIC: {
+				/*op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
 				op	 = arr_add(&asmc->ops, NULL);
 				op->type = ASMC_OP_LONG;
-				op->d	 = *(u32 *)buf_get(&elfc->bin.buf, sect->addr);
+				op->d	 = *(u32 *)buf_get(&elfc->bin.buf, sect->addr);*/
 				break;
 			}
 			case ELF_SECT_TYPE_ELF_IDENT: {
+				/*op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
 				elfc_asmc_schema(asmc,
 						 &sect->data.elf_ident.schema,
 						 s_elf_ident_labels,
 						 sect->data.elf_ident.data,
 						 sect->data.elf_ident.layout,
 						 0,
-						 0);
+						 0);*/
 				break;
 			}
 			case ELF_SECT_TYPE_ELF_HEADER: {
+				/*op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
 				elfc_asmc_schema(asmc,
 						 &sect->data.elf_header.schema,
 						 s_elf_header_labels,
 						 sect->data.elf_header.data,
 						 sect->data.elf_header.layout,
 						 0,
-						 0);
+						 0);*/
 				break;
 			}
-			case ELF_SECT_TYPE_PROGRAM_HEADERS: {
+			case ELF_SECT_TYPE_PROGRAM_HEADER: {
+				/*op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
 				void *row;
 				uint i = 0;
 				row_foreach(&sect->data.program_header.tbl, i, row)
@@ -642,6 +944,76 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 							 sect->data.program_header.layout,
 							 1,
 							 i);
+				}*/
+				break;
+			}
+			case ELF_SECT_TYPE_SECTION_HEADER: {
+				/*op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
+				void *row;
+				uint i = 0;
+				row_foreach(&sect->data.section_header.tbl, i, row)
+				{
+					elfc_asmc_schema(asmc,
+							 &sect->data.section_header.tbl.schema,
+							 s_section_header_labels,
+							 row,
+							 sect->data.section_header.layout,
+							 1,
+							 i);
+				}*/
+				break;
+			}
+			case ELF_SECT_TYPE_STRTAB: {
+				strv_t label = strvbuf_get(&elfc->strs, sect->label);
+				if (strv_eq(label, STRV(".shstrtab"))) {
+					log_info("reverse", "elfc", NULL, "skpping: %.*s", label.len, label.data);
+					break;
+				}
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_SECTION;
+				strvbuf_add(&asmc->strs, label, &op->str);
+				size_t *str_off;
+				uint i = 0;
+				arr_foreach(&sect->data.strtab.strs, i, str_off)
+				{
+					op	 = arr_add(&asmc->ops, NULL);
+					op->type = ASMC_OP_STRING;
+					strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, *str_off), &op->str);
+				}
+				break;
+			}
+			case ELF_SECT_TYPE_SECTION: {
+				strv_t label = strvbuf_get(&elfc->strs, sect->label);
+				if (strv_eq(label, STRV(".bss"))) {
+					log_info("reverse", "elfc", NULL, "skpping: %.*s", label.len, label.data);
+					break;
+				}
+				if (strv_eq(label, STRV(".eh_frame"))) {
+					log_info("reverse", "elfc", NULL, "skpping: %.*s", label.len, label.data);
+					break;
+				}
+				if (strv_eq(label, STRV(".interp"))) {
+					log_info("reverse", "elfc", NULL, "skpping: %.*s", label.len, label.data);
+					break;
+				}
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_SECTION;
+				strvbuf_add(&asmc->strs, label, &op->str);
+				for (uint off = 0; off < sect->size; off++) {
+					if (strv_eq(label, STRV(".text")) && off == 16) {
+						op	 = arr_add(&asmc->ops, NULL);
+						op->type = ASMC_OP_GLOBAL;
+						strvbuf_add(&asmc->strs, STRV("_start"), &op->str);
+						op	 = arr_add(&asmc->ops, NULL);
+						op->type = ASMC_OP_LABEL;
+						strvbuf_add(&asmc->strs, STRV("_start"), &op->str);
+					}
+
+					op	 = arr_add(&asmc->ops, NULL);
+					op->type = ASMC_OP_BYTE;
+					op->d	 = *(u8 *)buf_get(&elfc->bin.buf, sect->addr + off);
 				}
 				break;
 			}
@@ -650,7 +1022,7 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 				break;
 			}
 			}
-			label = 0;
+			// label = 0;
 			addr += sect->size;
 		}
 	}

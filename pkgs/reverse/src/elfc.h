@@ -12,7 +12,10 @@ typedef enum elfc_sect_type_e {
 	ELF_SECT_TYPE_MAGIC,
 	ELF_SECT_TYPE_ELF_IDENT,
 	ELF_SECT_TYPE_ELF_HEADER,
-	ELF_SECT_TYPE_PROGRAM_HEADERS,
+	ELF_SECT_TYPE_PROGRAM_HEADER,
+	ELF_SECT_TYPE_SECTION_HEADER,
+	ELF_SECT_TYPE_STRTAB,
+	ELF_SECT_TYPE_SECTION,
 } elfc_sect_type_t;
 
 typedef struct elfc_sect_s {
@@ -35,6 +38,13 @@ typedef struct elfc_sect_s {
 			tbl_t tbl;
 			uint layout;
 		} program_header;
+		struct {
+			tbl_t tbl;
+			uint layout;
+		} section_header;
+		struct {
+			arr_t strs;
+		} strtab;
 	} data;
 } elfc_sect_t;
 
@@ -42,6 +52,7 @@ typedef struct elfc_s {
 	bin_t bin;
 	strvbuf_t strs;
 	arr_t sects;
+	uint section_header;
 } elfc_t;
 
 elfc_t *elfc_init(elfc_t *elfc, alloc_t alloc);
