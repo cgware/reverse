@@ -2,15 +2,9 @@
 
 #include "arr.h"
 #include "asmc.h"
-#include "buf.h"
-#include "dst.h"
 #include "log.h"
 #include "mem.h"
 #include "schema.h"
-#include "str.h"
-#include "strbuf.h"
-#include "strv.h"
-#include "strvbuf.h"
 #include "tbl.h"
 
 elfc_t *elfc_init(elfc_t *elfc, alloc_t alloc)
@@ -31,6 +25,51 @@ void elfc_free(elfc_t *elfc)
 {
 	if (elfc == NULL) {
 		return;
+	}
+
+	elfc_sect_t *sect;
+	uint i = 0;
+	arr_foreach(&elfc->sects, i, sect)
+	{
+		switch (sect->type) {
+		case ELF_SECT_TYPE_ELF_IDENT: {
+			schema_free(&sect->data.elf_ident.schema);
+			break;
+		}
+		case ELF_SECT_TYPE_ELF_HEADER: {
+			schema_free(&sect->data.elf_header.schema);
+			break;
+		}
+		case ELF_SECT_TYPE_PROGRAM_HEADER: {
+			tbl_free(&sect->data.program_header.tbl);
+			break;
+		}
+		case ELF_SECT_TYPE_SECTION_HEADER: {
+			tbl_free(&sect->data.section_header.tbl);
+			break;
+		}
+		case ELF_SECT_TYPE_STRTAB: {
+			arr_free(&sect->data.strtab.strs);
+			break;
+		}
+		case ELF_SECT_TYPE_DYNAMIC: {
+			tbl_free(&sect->data.dynamic.tbl);
+			break;
+		}
+		case ELF_SECT_TYPE_DYNSYM: {
+			tbl_free(&sect->data.dynsym.tbl);
+			break;
+		}
+		case ELF_SECT_TYPE_RELADYN: {
+			tbl_free(&sect->data.reladyn.tbl);
+			break;
+		}
+		case ELF_SECT_TYPE_PROGRAM: {
+			asmc_free(&sect->data.program.asmc);
+			break;
+		}
+		default: break;
+		}
 	}
 
 	bin_free(&elfc->bin);
@@ -78,7 +117,7 @@ enum {
 	ELF_IDENT_PAD,
 };
 
-static int parse_elf_ident(elfc_t *elfc, size_t *off, elfc_sect_t *sect)
+static int parse_elf_ident(elfc_t *elfc, size_t *off, elfc_sect_t *sect, alloc_t alloc)
 {
 	static const schema_val_t classes[] = {
 		{ELF_IDENT_CLASS_32, STRVT("32-bit format")},
@@ -104,7 +143,7 @@ static int parse_elf_ident(elfc_t *elfc, size_t *off, elfc_sect_t *sect)
 		[ELF_IDENT_PAD]	       = {STRVT("PAD"), 7, SCHEMA_TYPE_INT, NULL, 0},
 	};
 
-	schema_init(&sect->data.elf_ident.schema, sizeof(fields) / sizeof(schema_field_desc_t), 1, 11, ALLOC_STD);
+	schema_init(&sect->data.elf_ident.schema, sizeof(fields) / sizeof(schema_field_desc_t), 1, 11, alloc);
 	schema_add_fields(&sect->data.elf_ident.schema, fields, sizeof(fields));
 
 	schema_member_desc_t members[] = {
@@ -158,7 +197,7 @@ enum {
 	ELF_HEADER_SHSTRNDX,
 };
 
-static int parse_elf_header(elfc_t *elfc, size_t *off, u8 class, elfc_sect_t *sect)
+static int parse_elf_header(elfc_t *elfc, size_t *off, u8 class, elfc_sect_t *sect, alloc_t alloc)
 {
 	static const schema_val_t types[] = {
 		{ELF_TYPE_EXEC, STRVT("Executable file")},
@@ -186,7 +225,7 @@ static int parse_elf_header(elfc_t *elfc, size_t *off, u8 class, elfc_sect_t *se
 		[ELF_HEADER_SHSTRNDX]  = {STRVT("Section Headers Names Index"), 2, SCHEMA_TYPE_INT, NULL, 0},
 	};
 
-	schema_init(&sect->data.elf_header.schema, sizeof(fields) / sizeof(schema_field_desc_t), 3, 16, ALLOC_STD);
+	schema_init(&sect->data.elf_header.schema, sizeof(fields) / sizeof(schema_field_desc_t), 3, 16, alloc);
 	schema_add_fields(&sect->data.elf_header.schema, fields, sizeof(fields));
 
 	schema_member_desc_t members[] = {
@@ -291,7 +330,7 @@ enum {
 	PROGRAM_HEADER_ALIGN,
 };
 
-static int parse_program_header(elfc_t *elfc, u64 off, u8 class, u16 num, u16 size, elfc_sect_t *sect)
+static int parse_program_header(elfc_t *elfc, u64 off, u8 class, u16 num, u16 size, elfc_sect_t *sect, alloc_t alloc)
 {
 	static const schema_val_t types[] = {
 		{PROGRAM_HEADER_TYPE_NULL, STRVT("NULL")},
@@ -326,7 +365,7 @@ static int parse_program_header(elfc_t *elfc, u64 off, u8 class, u16 num, u16 si
 		[PROGRAM_HEADER_ALIGN]	= {STRVT("Align"), 8, SCHEMA_TYPE_INT, NULL, 0},
 	};
 
-	tbl_init(&sect->data.program_header.tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 23, ALLOC_STD);
+	tbl_init(&sect->data.program_header.tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 23, alloc);
 
 	schema_add_fields(&sect->data.program_header.tbl.schema, fields, sizeof(fields));
 
@@ -368,7 +407,7 @@ static int parse_program_header(elfc_t *elfc, u64 off, u8 class, u16 num, u16 si
 	};
 
 	schema_add_layout(&sect->data.program_header.tbl.schema, members64, sizeof(members64), NULL);
-	tbl_init_rows(&sect->data.program_header.tbl, num, ALLOC_STD);
+	tbl_init_rows(&sect->data.program_header.tbl, num, alloc);
 
 	switch (class) {
 	case ELF_IDENT_CLASS_32: sect->data.program_header.layout = 1; break;
@@ -435,21 +474,7 @@ typedef enum section_header_flag_e {
 	__SECTION_HEADER_FLAG_CNT,
 } section_header_flag_t;
 
-enum {
-	SECTION_HEADER_NAME_OFF,
-	SECTION_HEADER_NAME,
-	SECTION_HEADER_TYPE,
-	SECTION_HEADER_FLAGS,
-	SECTION_HEADER_ADDR,
-	SECTION_HEADER_OFFSET,
-	SECTION_HEADER_SIZE,
-	SECTION_HEADER_LINK,
-	SECTION_HEADER_INFO,
-	SECTION_HEADER_ALIGN,
-	SECTION_HEADER_ENTSIZE,
-};
-
-static int parse_section_header(elfc_t *elfc, u64 off, u8 class, u16 num, u16 size, u16 shstrndx, elfc_sect_t *sect)
+static int parse_section_header(elfc_t *elfc, u64 off, u8 class, u16 num, u16 size, u16 shstrndx, elfc_sect_t *sect, alloc_t alloc)
 {
 	static const schema_val_t types[] = {
 		{SECTION_HEADER_TYPE_NULL, STRVT("NULL")},
@@ -496,7 +521,7 @@ static int parse_section_header(elfc_t *elfc, u64 off, u8 class, u16 num, u16 si
 		[SECTION_HEADER_ENTSIZE]  = {STRVT("Entry size"), 8, SCHEMA_TYPE_INT, NULL, 0},
 	};
 
-	tbl_init(&sect->data.section_header.tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 36, ALLOC_STD);
+	tbl_init(&sect->data.section_header.tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 36, alloc);
 	schema_add_fields(&sect->data.section_header.tbl.schema, fields, sizeof(fields));
 
 	schema_member_desc_t members[] = {
@@ -544,7 +569,7 @@ static int parse_section_header(elfc_t *elfc, u64 off, u8 class, u16 num, u16 si
 	};
 
 	schema_add_layout(&sect->data.section_header.tbl.schema, members64, sizeof(members64), NULL);
-	tbl_init_rows(&sect->data.section_header.tbl, num, ALLOC_STD);
+	tbl_init_rows(&sect->data.section_header.tbl, num, alloc);
 
 	switch (class) {
 	case ELF_IDENT_CLASS_32: sect->data.section_header.layout = 1; break;
@@ -567,10 +592,10 @@ static int parse_section_header(elfc_t *elfc, u64 off, u8 class, u16 num, u16 si
 	return 0;
 }
 
-static int parse_strtab_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect)
+static int parse_strtab_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, alloc_t alloc)
 {
 	char *data = elfc->bin.buf.data;
-	arr_init(&sect->data.strtab.strs, size / 8 + 1, sizeof(size_t), ALLOC_STD);
+	arr_init(&sect->data.strtab.strs, size / 8 + 1, sizeof(size_t), alloc);
 	u64 base = off;
 	while (off < base + size) {
 		u64 str_start = off;
@@ -587,7 +612,1548 @@ static int parse_strtab_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *se
 	return 0;
 }
 
-int elfc_read(elfc_t *elfc, fs_t *fs, strv_t path)
+enum {
+	DYNAMIC_SECTION_TAG,
+	DYNAMIC_SECTION_VAL,
+	DYNAMIC_SECTION_VAL_STR,
+};
+
+typedef enum dynamic_tag_e {
+	DYNAMIC_TAG_NULL,
+	DYNAMIC_TAG_NEEDED,
+	DYNAMIC_TAG_PLTRELSZ,
+	DYNAMIC_TAG_PLTGOT,
+	DYNAMIC_TAG_HASH,
+	DYNAMIC_TAG_STRTAB,
+	DYNAMIC_TAG_SYMTAB,
+	DYNAMIC_TAG_RELA,
+	DYNAMIC_TAG_RELASZ,
+	DYNAMIC_TAG_RELAENT,
+	DYNAMIC_TAG_STRSZ,
+	DYNAMIC_TAG_SYMENT,
+	DYNAMIC_TAG_INIT,
+	DYNAMIC_TAG_FINI,
+	DYNAMIC_TAG_SONAME,
+	DYNAMIC_TAG_RPATH,
+	DYNAMIC_TAG_SYMBOLIC,
+	DYNAMIC_TAG_REL,
+	DYNAMIC_TAG_RELSZ,
+	DYNAMIC_TAG_RELENT,
+	DYNAMIC_TAG_PLTREL,
+	DYNAMIC_TAG_DEBUG,
+	DYNAMIC_TAG_TEXTREL,
+	DYNAMIC_TAG_JMPREL,
+	DYNAMIC_TAG_BIND_NOW,
+	DYNAMIC_TAG_INIT_ARRAY,
+	DYNAMIC_TAG_FINI_ARRAY,
+	DYNAMIC_TAG_INIT_ARRAYSZ,
+	DYNAMIC_TAG_FINI_ARRAYSZ,
+	DYNAMIC_TAG_RUNPATH,
+	DYNAMIC_TAG_FLAGS,
+	DYNAMIC_TAG_ENCODING,
+	DYNAMIC_TAG_PREINIT_ARRAY,
+	DYNAMIC_TAG_PREINIT_ARRAYSZ,
+} tynamic_tag_t;
+
+#define DYNAMIC_TAG_LOOS	   0x6000000d
+#define DYNAMIC_TAG_SUNW_RTLDINF   0x6000000e
+#define DYNAMIC_TAG_HIOS	   0x6ffff000
+#define DYNAMIC_TAG_VALRNGLO	   0x6ffffd00
+#define DYNAMIC_TAG_CHECKSUM	   0x6ffffdf8
+#define DYNAMIC_TAG_PLTPADSZ	   0x6ffffdf9
+#define DYNAMIC_TAG_MOVEENT	   0x6ffffdfa
+#define DYNAMIC_TAG_MOVESZ	   0x6ffffdfb
+#define DYNAMIC_TAG_FEATURE_1	   0x6ffffdfc
+#define DYNAMIC_TAG_POSFLAG_1	   0x6ffffdfd
+#define DYNAMIC_TAG_SYMINSZ	   0x6ffffdfe
+#define DYNAMIC_TAG_SYMINENT	   0x6ffffdff
+#define DYNAMIC_TAG_VALRNGHI	   0x6ffffdff
+#define DYNAMIC_TAG_ADDRRNGLO	   0x6ffffe00
+#define DYNAMIC_TAG_GNU_HASH	   0x6ffffef5
+#define DYNAMIC_TAG_CONFIG	   0x6ffffefa
+#define DYNAMIC_TAG_DEPAUDIT	   0x6ffffefb
+#define DYNAMIC_TAG_AUDIT	   0x6ffffefc
+#define DYNAMIC_TAG_PLTPAD	   0x6ffffefd
+#define DYNAMIC_TAG_MOVETAB	   0x6ffffefe
+#define DYNAMIC_TAG_SYMINFO	   0x6ffffeff
+#define DYNAMIC_TAG_ADDRRNGHI	   0x6ffffeff
+#define DYNAMIC_TAG_VERSYM	   0x6ffffff0
+#define DYNAMIC_TAG_RELACOUNT	   0x6ffffff9
+#define DYNAMIC_TAG_RELCOUNT	   0x6ffffffa
+#define DYNAMIC_TAG_FLAGS_1	   0x6ffffffb
+#define DYNAMIC_TAG_VERDEF	   0x6ffffffc
+#define DYNAMIC_TAG_VERDEFNUM	   0x6ffffffd
+#define DYNAMIC_TAG_VERNEED	   0x6ffffffe
+#define DYNAMIC_TAG_VERNEEDNUM	   0x6fffffff
+#define DYNAMIC_TAG_LOPROC	   0x70000000
+#define DYNAMIC_TAG_SPARC_REGISTER 0x70000001
+#define DYNAMIC_TAG_AUXILIARY	   0x7ffffffd
+#define DYNAMIC_TAG_USED	   0x7ffffffe
+#define DYNAMIC_TAG_FILTER	   0x7fffffff
+#define DYNAMIC_TAG_HIPROC	   0x7fffffff
+
+static int map_dynamic_name(tbl_t *tbl, uint row, uint col, const void *data, void *priv)
+{
+	const char *names_offset = priv;
+
+	const u16 *off = data;
+
+	u64 tag	   = *(u64 *)tbl_get_cell(tbl, row, DYNAMIC_SECTION_TAG);
+	strv_t str = tag == DYNAMIC_TAG_NEEDED ? strv_cstr(&names_offset[*off]) : STRV_NULL;
+
+	if (tbl_set_cell_str(tbl, row, col, 0, str)) {
+		log_error("reverse", "elfc", NULL, "Failed to set name");
+		return 1;
+	}
+
+	return 0;
+}
+
+static int parse_dynamic_section(elfc_t *elfc, size_t off, u64 size, elf_ident_class_t class, elfc_sect_t *sect, alloc_t alloc)
+{
+	static const schema_val_t tags[] = {
+		{DYNAMIC_TAG_NULL, STRVT("NULL")},
+		{DYNAMIC_TAG_NEEDED, STRVT("NEEDED")},
+		{DYNAMIC_TAG_PLTRELSZ, STRVT("NEEDED")},
+		{DYNAMIC_TAG_PLTGOT, STRVT("PLTGOT")},
+		{DYNAMIC_TAG_HASH, STRVT("HASH")},
+		{DYNAMIC_TAG_STRTAB, STRVT("STRTAB")},
+		{DYNAMIC_TAG_SYMTAB, STRVT("SYMTAB")},
+		{DYNAMIC_TAG_RELA, STRVT("RELA")},
+		{DYNAMIC_TAG_RELASZ, STRVT("RELASZ")},
+		{DYNAMIC_TAG_RELAENT, STRVT("RELAENT")},
+		{DYNAMIC_TAG_STRSZ, STRVT("STRSZ")},
+		{DYNAMIC_TAG_SYMENT, STRVT("SYMENT")},
+		{DYNAMIC_TAG_INIT, STRVT("INIT")},
+		{DYNAMIC_TAG_FINI, STRVT("FINI")},
+		{DYNAMIC_TAG_SONAME, STRVT("SONAME")},
+		{DYNAMIC_TAG_RPATH, STRVT("RPATH")},
+		{DYNAMIC_TAG_SYMBOLIC, STRVT("SYMBOLIC")},
+		{DYNAMIC_TAG_REL, STRVT("REL")},
+		{DYNAMIC_TAG_RELSZ, STRVT("RELSZ")},
+		{DYNAMIC_TAG_RELENT, STRVT("RELENT")},
+		{DYNAMIC_TAG_PLTREL, STRVT("PLTREL")},
+		{DYNAMIC_TAG_DEBUG, STRVT("DEBUG")},
+		{DYNAMIC_TAG_TEXTREL, STRVT("TEXTREL")},
+		{DYNAMIC_TAG_JMPREL, STRVT("JMPREL")},
+		{DYNAMIC_TAG_BIND_NOW, STRVT("BIND_NOW")},
+		{DYNAMIC_TAG_INIT_ARRAY, STRVT("INIT_ARRAY")},
+		{DYNAMIC_TAG_FINI_ARRAY, STRVT("FINI_ARRAY")},
+		{DYNAMIC_TAG_INIT_ARRAYSZ, STRVT("INIT_ARRAYSZ")},
+		{DYNAMIC_TAG_FINI_ARRAYSZ, STRVT("FINI_ARRAYSZ")},
+		{DYNAMIC_TAG_RUNPATH, STRVT("RUNPATH")},
+		{DYNAMIC_TAG_FLAGS, STRVT("FLAGS")},
+		{DYNAMIC_TAG_ENCODING, STRVT("ENCODING")},
+		{DYNAMIC_TAG_PREINIT_ARRAY, STRVT("PREINIT_ARRAY")},
+		{DYNAMIC_TAG_PREINIT_ARRAYSZ, STRVT("PREINIT_ARRAYSZ")},
+		{DYNAMIC_TAG_LOOS, STRVT("LOOS")},
+		{DYNAMIC_TAG_SUNW_RTLDINF, STRVT("SUNW_RTLDINF")},
+		{DYNAMIC_TAG_HIOS, STRVT("HIOS")},
+		{DYNAMIC_TAG_VALRNGLO, STRVT("VALRNGLO")},
+		{DYNAMIC_TAG_CHECKSUM, STRVT("CHECKSUM")},
+		{DYNAMIC_TAG_PLTPADSZ, STRVT("PLTPADSZ")},
+		{DYNAMIC_TAG_MOVEENT, STRVT("MOVEENT")},
+		{DYNAMIC_TAG_MOVESZ, STRVT("MOVESZ")},
+		{DYNAMIC_TAG_FEATURE_1, STRVT("FEATURE_1")},
+		{DYNAMIC_TAG_POSFLAG_1, STRVT("POSFLAG_1")},
+		{DYNAMIC_TAG_SYMINSZ, STRVT("SYMINSZ")},
+		{DYNAMIC_TAG_SYMINENT, STRVT("SYMINENT")},
+		{DYNAMIC_TAG_VALRNGHI, STRVT("VALRNGHI")},
+		{DYNAMIC_TAG_ADDRRNGLO, STRVT("ADDRRNGLO")},
+		{DYNAMIC_TAG_GNU_HASH, STRVT("GNU_HASH")},
+		{DYNAMIC_TAG_CONFIG, STRVT("CONFIG")},
+		{DYNAMIC_TAG_DEPAUDIT, STRVT("DEPAUDIT")},
+		{DYNAMIC_TAG_AUDIT, STRVT("AUDIT")},
+		{DYNAMIC_TAG_PLTPAD, STRVT("PLTPAD")},
+		{DYNAMIC_TAG_MOVETAB, STRVT("MOVETAB")},
+		{DYNAMIC_TAG_SYMINFO, STRVT("SYMINFO")},
+		{DYNAMIC_TAG_ADDRRNGHI, STRVT("ADDRRNGHI")},
+		{DYNAMIC_TAG_VERSYM, STRVT("VERSYM")},
+		{DYNAMIC_TAG_RELACOUNT, STRVT("RELACOUNT")},
+		{DYNAMIC_TAG_RELCOUNT, STRVT("RELCOUNT")},
+		{DYNAMIC_TAG_FLAGS_1, STRVT("FLAGS_1")},
+		{DYNAMIC_TAG_VERDEF, STRVT("VERDEF")},
+		{DYNAMIC_TAG_VERDEFNUM, STRVT("VERDEFNUM")},
+		{DYNAMIC_TAG_VERNEED, STRVT("VERNEED")},
+		{DYNAMIC_TAG_VERNEEDNUM, STRVT("VERNEEDNUM")},
+		{DYNAMIC_TAG_LOPROC, STRVT("LOPROC")},
+		{DYNAMIC_TAG_SPARC_REGISTER, STRVT("SPARC_REGISTER")},
+		{DYNAMIC_TAG_AUXILIARY, STRVT("AUXILIARY")},
+		{DYNAMIC_TAG_USED, STRVT("USED")},
+		{DYNAMIC_TAG_FILTER, STRVT("FILTER")},
+		{DYNAMIC_TAG_HIPROC, STRVT("HIPROC")},
+	};
+
+	schema_field_desc_t fields[] = {
+		[DYNAMIC_SECTION_TAG]	  = {STRVT("Tag"), 8, SCHEMA_TYPE_ENUM, tags, sizeof(tags)},
+		[DYNAMIC_SECTION_VAL]	  = {STRVT("Val"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[DYNAMIC_SECTION_VAL_STR] = {STRVT("Str"), 0, SCHEMA_TYPE_STR, NULL, 0},
+	};
+
+	tbl_init(&sect->data.dynamic.tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 36, alloc);
+	schema_add_fields(&sect->data.dynamic.tbl.schema, fields, sizeof(fields));
+
+	schema_member_desc_t members[] = {
+		{DYNAMIC_SECTION_TAG, 8},
+		{DYNAMIC_SECTION_VAL, 8},
+		{DYNAMIC_SECTION_VAL_STR, 0},
+	};
+
+	schema_add_layout(&sect->data.dynamic.tbl.schema, members, sizeof(members), NULL);
+
+	schema_member_desc_t members32[] = {
+		{DYNAMIC_SECTION_TAG, 4},
+		{DYNAMIC_SECTION_VAL, 4},
+	};
+
+	schema_add_layout(&sect->data.dynamic.tbl.schema, members32, sizeof(members32), NULL);
+
+	schema_member_desc_t members64[] = {
+		{DYNAMIC_SECTION_TAG, 8},
+		{DYNAMIC_SECTION_VAL, 8},
+	};
+
+	schema_add_layout(&sect->data.dynamic.tbl.schema, members64, sizeof(members64), NULL);
+	tbl_init_rows(&sect->data.dynamic.tbl, 16, alloc);
+
+	switch (class) {
+	case ELF_IDENT_CLASS_32: sect->data.dynamic.layout = 1; break;
+	case ELF_IDENT_CLASS_64: sect->data.dynamic.layout = 2; break;
+	default: return 1;
+	}
+
+	u64 offset = 0;
+
+	size_t end = off + size;
+	while (off < end) {
+		void *data = tbl_add_row(&sect->data.dynamic.tbl, NULL);
+		read_layout(&elfc->bin, &off, &sect->data.dynamic.tbl.schema, sect->data.dynamic.layout, data);
+
+		u64 tag = *(u64 *)schema_get_val(&sect->data.dynamic.tbl.schema, DYNAMIC_SECTION_TAG, data);
+		if (tag == DYNAMIC_TAG_STRTAB) {
+			offset = *(u64 *)schema_get_val(&sect->data.dynamic.tbl.schema, DYNAMIC_SECTION_VAL, data);
+		}
+	}
+
+	const char *strtab_offset = &((char *)elfc->bin.buf.data)[offset];
+	tbl_map(&sect->data.dynsym.tbl, DYNAMIC_SECTION_VAL, DYNAMIC_SECTION_VAL_STR, map_dynamic_name, (void *)strtab_offset);
+
+	return 0;
+}
+
+enum {
+	DYNSYM_SECTION_TYPE_NOTYPE,
+	DYNSYM_SECTION_TYPE_OBJECT,
+	DYNSYM_SECTION_TYPE_FUNC,
+};
+
+enum {
+	DYNSYM_SECTION_BIND_LOCAL,
+	DYNSYM_SECTION_BIND_GLOBAL,
+	DYNSYM_SECTION_BIND_WEAK,
+};
+
+enum {
+	DYNSYM_SECTION_NAME_OFF,
+	DYNSYM_SECTION_INFO,
+	DYNSYM_SECTION_TYPE,
+	DYNSYM_SECTION_BIND,
+	DYNSYM_SECTION_OTHER,
+	DYNSYM_SECTION_INDEX,
+	DYNSYM_SECTION_VALUE,
+	DYNSYM_SECTION_SIZE,
+	DYNSYM_SECTION_NAME,
+};
+
+static int map_dynsym_type(tbl_t *tbl, uint row, uint col, const void *data, void *priv)
+{
+	(void)priv;
+	const u8 info = *(u8 *)data;
+	u8 type	      = (info >> 0) & 0xF;
+	return tbl_set_cell(tbl, row, col, 0, &type);
+}
+
+static int map_dynsym_bind(tbl_t *tbl, uint row, uint col, const void *data, void *priv)
+{
+	(void)priv;
+	const u8 info = *(u8 *)data;
+	u8 type	      = (info >> 4) & 0xF;
+	return tbl_set_cell(tbl, row, col, 0, &type);
+}
+
+static int parse_dynsym_section(elfc_t *elfc, u64 off, u64 size, elf_ident_class_t class, u64 dynstr_off, elfc_sect_t *sect, alloc_t alloc)
+{
+	static const schema_val_t types[] = {
+		{DYNSYM_SECTION_TYPE_NOTYPE, STRVT("NOTYPE")},
+		{DYNSYM_SECTION_TYPE_OBJECT, STRVT("OBJECT")},
+		{DYNSYM_SECTION_TYPE_FUNC, STRVT("FUNC")},
+	};
+
+	static const schema_val_t binds[] = {
+		{DYNSYM_SECTION_BIND_LOCAL, STRVT("LOCAL")},
+		{DYNSYM_SECTION_BIND_GLOBAL, STRVT("GLOBAL")},
+		{DYNSYM_SECTION_BIND_WEAK, STRVT("WEAK")},
+	};
+
+	schema_field_desc_t fields[] = {
+		[DYNSYM_SECTION_NAME_OFF] = {STRVT("Name"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		[DYNSYM_SECTION_INFO]	  = {STRVT("Info"), 1, SCHEMA_TYPE_INT, NULL, 0},
+		[DYNSYM_SECTION_TYPE]	  = {STRVT("Type"), 1, SCHEMA_TYPE_ENUM, types, sizeof(types)},
+		[DYNSYM_SECTION_BIND]	  = {STRVT("Bind"), 1, SCHEMA_TYPE_ENUM, binds, sizeof(binds)},
+		[DYNSYM_SECTION_OTHER]	  = {STRVT("Other"), 1, SCHEMA_TYPE_INT, NULL, 0},
+		[DYNSYM_SECTION_INDEX]	  = {STRVT("Index"), 2, SCHEMA_TYPE_INT, NULL, 0},
+		[DYNSYM_SECTION_VALUE]	  = {STRVT("Value"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[DYNSYM_SECTION_SIZE]	  = {STRVT("Size"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[DYNSYM_SECTION_NAME]	  = {STRVT("Name"), 0, SCHEMA_TYPE_STR, NULL, 0},
+	};
+
+	tbl_init(&sect->data.dynsym.tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 36, alloc);
+	schema_add_fields(&sect->data.dynsym.tbl.schema, fields, sizeof(fields));
+
+	schema_member_desc_t members[] = {
+		{DYNSYM_SECTION_NAME_OFF, 4},
+		{DYNSYM_SECTION_INFO, 1},
+		{DYNSYM_SECTION_TYPE, 1},
+		{DYNSYM_SECTION_BIND, 1},
+		{DYNSYM_SECTION_OTHER, 1},
+		{DYNSYM_SECTION_INDEX, 2},
+		{DYNSYM_SECTION_VALUE, 8},
+		{DYNSYM_SECTION_SIZE, 8},
+		{DYNSYM_SECTION_NAME, 0},
+	};
+
+	schema_add_layout(&sect->data.dynsym.tbl.schema, members, sizeof(members), NULL);
+
+	schema_member_desc_t members32[] = {
+		{DYNSYM_SECTION_NAME_OFF, 4},
+		{DYNSYM_SECTION_VALUE, 4},
+		{DYNSYM_SECTION_SIZE, 4},
+		{DYNSYM_SECTION_INFO, 1},
+		{DYNSYM_SECTION_OTHER, 1},
+		{DYNSYM_SECTION_INDEX, 2},
+	};
+
+	schema_add_layout(&sect->data.dynsym.tbl.schema, members32, sizeof(members32), NULL);
+
+	schema_member_desc_t members64[] = {
+		{DYNSYM_SECTION_NAME_OFF, 4},
+		{DYNSYM_SECTION_INFO, 1},
+		{DYNSYM_SECTION_OTHER, 1},
+		{DYNSYM_SECTION_INDEX, 2},
+		{DYNSYM_SECTION_VALUE, 8},
+		{DYNSYM_SECTION_SIZE, 8},
+	};
+
+	schema_add_layout(&sect->data.dynsym.tbl.schema, members64, sizeof(members64), NULL);
+	tbl_init_rows(&sect->data.dynsym.tbl, 16, alloc);
+
+	switch (class) {
+	case ELF_IDENT_CLASS_32: sect->data.dynsym.layout = 1; break;
+	case ELF_IDENT_CLASS_64: sect->data.dynsym.layout = 2; break;
+	default: return 1;
+	}
+
+	size_t end = off + size;
+	while (off < end) {
+		void *data = tbl_add_row(&sect->data.dynsym.tbl, NULL);
+		read_layout(&elfc->bin, &off, &sect->data.dynsym.tbl.schema, sect->data.dynsym.layout, data);
+	}
+
+	tbl_map(&sect->data.dynsym.tbl, DYNSYM_SECTION_INFO, DYNSYM_SECTION_TYPE, map_dynsym_type, NULL);
+	tbl_map(&sect->data.dynsym.tbl, DYNSYM_SECTION_INFO, DYNSYM_SECTION_BIND, map_dynsym_bind, NULL);
+	const char *dynstr_offset = &((char *)elfc->bin.buf.data)[dynstr_off];
+	tbl_map(&sect->data.dynsym.tbl, DYNSYM_SECTION_NAME_OFF, DYNSYM_SECTION_NAME, map_name, (void *)dynstr_offset);
+
+	return 0;
+}
+
+enum {
+	RELADYN_SECTION_OFFSET,
+	RELADYN_SECTION_TYPE,
+	RELADYN_SECTION_BIND,
+	RELADYN_SECTION_ADDEND,
+	RELADYN_SECTION_NAME,
+};
+
+enum {
+	RELADYN_SECTIONT_TYPE_GLOB_DAT = 6,
+	RELADYN_SECTIONT_TYPE_RELATIVE = 8,
+};
+
+typedef struct map_reladyn_name_priv_s {
+	elfc_t *elfc;
+	uint dynsym_id;
+} map_reladyn_name_priv_t;
+
+static int map_reladyn_name(tbl_t *tbl, uint row, uint col, const void *data, void *priv)
+{
+	map_reladyn_name_priv_t *reladyn = priv;
+	elfc_sect_t *dynsym_sect	 = arr_get(&reladyn->elfc->sects, reladyn->dynsym_id);
+
+	const u32 *bind = data;
+
+	const size_t *name_off = tbl_get_cell(&dynsym_sect->data.dynsym.tbl, *bind, DYNSYM_SECTION_NAME);
+	strv_t name	       = strvbuf_get(&dynsym_sect->data.dynsym.tbl.strs, *name_off);
+	if (tbl_set_cell_str(tbl, row, col, 0, name)) {
+		log_error("reverse", "main", NULL, "Failed to set name");
+		return 1;
+	}
+
+	return 0;
+}
+
+static int parse_reladyn_section(elfc_t *elfc, u64 off, u64 size, elf_ident_class_t class, uint dynsym_id, elfc_sect_t *sect, alloc_t alloc)
+{
+	static const schema_val_t types[] = {
+		{RELADYN_SECTIONT_TYPE_GLOB_DAT, STRVT("GLOB_DAT")},
+		{RELADYN_SECTIONT_TYPE_RELATIVE, STRVT("RELATIVE")},
+	};
+
+	schema_field_desc_t fields[] = {
+		[RELADYN_SECTION_OFFSET] = {STRVT("Offset"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[RELADYN_SECTION_TYPE]	 = {STRVT("Type"), 4, SCHEMA_TYPE_ENUM, types, sizeof(types)},
+		[RELADYN_SECTION_BIND]	 = {STRVT("Bind"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		[RELADYN_SECTION_ADDEND] = {STRVT("Addend"), 8, SCHEMA_TYPE_INT, NULL, 0},
+		[RELADYN_SECTION_NAME]	 = {STRVT("Name"), 0, SCHEMA_TYPE_STR, NULL, 0},
+	};
+
+	tbl_init(&sect->data.reladyn.tbl, sizeof(fields) / sizeof(schema_field_desc_t), 3, 36, alloc);
+	schema_add_fields(&sect->data.reladyn.tbl.schema, fields, sizeof(fields));
+
+	schema_member_desc_t members[] = {
+		{RELADYN_SECTION_OFFSET, 8},
+		{RELADYN_SECTION_TYPE, 4},
+		{RELADYN_SECTION_BIND, 4},
+		{RELADYN_SECTION_ADDEND, 8},
+		{RELADYN_SECTION_NAME, 0},
+	};
+
+	schema_add_layout(&sect->data.reladyn.tbl.schema, members, sizeof(members), NULL);
+
+	schema_member_desc_t members32[] = {
+		{RELADYN_SECTION_OFFSET, 4},
+		{RELADYN_SECTION_TYPE, 2},
+		{RELADYN_SECTION_BIND, 2},
+		{RELADYN_SECTION_ADDEND, 4},
+	};
+
+	schema_add_layout(&sect->data.reladyn.tbl.schema, members32, sizeof(members32), NULL);
+
+	schema_member_desc_t members64[] = {
+		{RELADYN_SECTION_OFFSET, 8},
+		{RELADYN_SECTION_TYPE, 4},
+		{RELADYN_SECTION_BIND, 4},
+		{RELADYN_SECTION_ADDEND, 8},
+	};
+
+	schema_add_layout(&sect->data.reladyn.tbl.schema, members64, sizeof(members64), NULL);
+	tbl_init_rows(&sect->data.reladyn.tbl, 16, alloc);
+
+	uint layout;
+	switch (class) {
+	case ELF_IDENT_CLASS_32: layout = 1; break;
+	case ELF_IDENT_CLASS_64: layout = 2; break;
+	default: return 1;
+	}
+
+	size_t end = off + size;
+	while (off < end) {
+		void *data = tbl_add_row(&sect->data.reladyn.tbl, NULL);
+		read_layout(&elfc->bin, &off, &sect->data.reladyn.tbl.schema, layout, data);
+	}
+
+	map_reladyn_name_priv_t priv = {
+		.elfc	   = elfc,
+		.dynsym_id = dynsym_id,
+	};
+
+	tbl_map(&sect->data.reladyn.tbl, RELADYN_SECTION_BIND, RELADYN_SECTION_NAME, map_reladyn_name, &priv);
+
+	return 0;
+}
+
+#define bit_is_set(data, bit) ((data) & (1 << (bit)))
+#define bits(data, off, mask) (((data) >> (off)) & (mask))
+
+enum {
+	X86_PREFIX_OP_SIZE = 0x66,
+	X86_PREFIX_CS	   = 0x2E,
+	X86_PREFIX_REP	   = 0xF2,
+	X86_PREFIX_CET	   = 0xF3,
+	X86_PREFIX_EXT	   = 0x0F,
+};
+
+enum {
+	X86_OP_ADD	     = 0x01,
+	X86_OP_SUB	     = 0x29,
+	X86_OP_XOR	     = 0x31,
+	X86_OP_CMP	     = 0x39,
+	X86_OP_PUSH_RAX	     = 0x50,
+	X86_OP_PUSH_RSP	     = 0x54,
+	X86_OP_PUSH_RBP	     = 0x55,
+	X86_OP_POP_RBP	     = 0x5D,
+	X86_OP_POP_RSI	     = 0x5E,
+	X86_OP_JE	     = 0x74,
+	X86_OP_JNE	     = 0x75,
+	X86_OP_CMP_IMM	     = 0x80,
+	X86_OP_ALU	     = 0x83,
+	X86_OP_TEST	     = 0x85,
+	X86_OP_MOV_REG	     = 0x89,
+	X86_OP_MOV_RIP	     = 0x8B,
+	X86_OP_LEA	     = 0x8D,
+	X86_OP_NOP	     = 0x90,
+	X86_OP_MOV_EAX	     = 0xB8,
+	X86_OP_SHR_SAR	     = 0xC1,
+	X86_OP_RET	     = 0xC3,
+	X86_OP_MOV_IMM8	     = 0xC6,
+	X86_OP_MOV_IMM	     = 0xC7,
+	X86_OP_SAR1	     = 0xD1,
+	X86_OP_CALL	     = 0xE8,
+	X86_OP_JMP	     = 0xE9,
+	X86_OP_HLT	     = 0xF4,
+	X86_OP_JMP_CALL_PUSH = 0xFF,
+};
+
+enum {
+	X86_EXT_SYSCALL	     = 0x5,
+	X86_EXT_OPCODE_GROUP = 0x1E,
+	X86_EXT_NOP	     = 0x1F,
+};
+
+enum {
+	X86_EXT_OPCODE_ENDBR64 = 0xFA,
+};
+
+enum {
+	X86_REG_EAX = 0x0,
+	X86_REG_ECX = 0x1,
+	X86_REG_EBP = 0x5,
+};
+
+enum {
+	X86_REG_RAX = 0x0,
+	X86_REG_RCX = 0x1,
+	X86_REG_RDX = 0x2,
+	X86_REG_RSP = 0x4,
+	X86_REG_RBP = 0x5,
+	X86_REG_RSI = 0x6,
+	X86_REG_RDI = 0x7,
+	X86_REG_R8  = 0x8,
+	X86_REG_R9  = 0x9,
+};
+
+static asmc_reg_type_t read_reg64(u8 address)
+{
+	switch (address) {
+	case X86_REG_RAX: return ASMC_REG_RAX;
+	case X86_REG_RCX: return ASMC_REG_RCX;
+	case X86_REG_RDX: return ASMC_REG_RDX;
+	case X86_REG_RSP: return ASMC_REG_RSP;
+	case X86_REG_RBP: return ASMC_REG_RBP;
+	case X86_REG_RSI: return ASMC_REG_RSI;
+	case X86_REG_RDI: return ASMC_REG_RDI;
+	case X86_REG_R8: return ASMC_REG_R8;
+	case X86_REG_R9: return ASMC_REG_R9;
+	default: log_error("reverse", "main", NULL, "unknown reg64: %02X", address);
+	}
+
+	return 0;
+}
+
+static asmc_reg_type_t read_reg32(u8 address)
+{
+	switch (address) {
+	case X86_REG_EAX: return ASMC_REG_EAX;
+	case X86_REG_ECX: return ASMC_REG_ECX;
+	case X86_REG_EBP: return ASMC_REG_EBP;
+	default: log_error("reverse", "main", NULL, "unknown reg32: %02X", address);
+	}
+
+	return 0;
+}
+
+static int read_byte(bin_t *bin, byte *b, size_t *off)
+{
+	if (bin_get_int(bin, b, sizeof(byte), off)) {
+		return 1;
+	}
+
+	dputf(DST_STD(), "0x%04X: %02X - ", *off - 1, *b);
+	return 0;
+}
+
+static int read_val(bin_t *bin, u64 *dst, uint size, size_t *off)
+{
+	*dst = 0;
+	for (uint i = 0; i < size; i++) {
+		byte b;
+		read_byte(bin, &b, off);
+		dputf(DST_STD(), "VALUE\n");
+		*dst |= (b << (8 * i));
+	}
+
+	return 0;
+}
+
+typedef enum op_spec_type_e {
+	OP_SPEC_TYPE_UNKNOWN,
+	OP_SPEC_TYPE_OP,
+	OP_SPEC_TYPE_PREFIX,
+} op_spec_type_t;
+
+enum {
+	OP_SPEC_PRE_NONE,
+	OP_SPEC_PRE_REX,
+	OP_SPEC_PRE_OPSIZE,
+	OP_SPEC_PRE_CS,
+	OP_SPEC_PRE_REP,
+	OP_SPEC_PRE_CET,
+	__OP_SPEC_PRE_CNT,
+};
+
+static const char *s_prefix_str[] = {
+	[OP_SPEC_PRE_NONE]   = "NONE",
+	[OP_SPEC_PRE_REX]    = "REX",
+	[OP_SPEC_PRE_OPSIZE] = "OPSIZE",
+	[OP_SPEC_PRE_CS]     = "CS",
+	[OP_SPEC_PRE_REP]    = "REP",
+	[OP_SPEC_PRE_CET]    = "CET",
+};
+
+typedef struct op_spec_s {
+	const char *name;
+	op_spec_type_t type;
+	int prefix;
+	asmc_op_type_t op;
+	int mod;
+} op_spec_t;
+
+op_spec_t s_op_spec[0x100] = {
+	// Op
+	[X86_OP_ADD]	       = {"ADD", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_REX), ASMC_OP_ADD_REG, 1},
+	[X86_OP_SUB]	       = {"SUB", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_REX), ASMC_OP_SUB_REG, 1},
+	[X86_OP_XOR]	       = {"XOR", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE) | (1 << OP_SPEC_PRE_REX), ASMC_OP_XOR, 1},
+	[X86_OP_CMP]	       = {"CMP", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_REX), ASMC_OP_CMP_REG, 1},
+	[X86_OP_PUSH_RAX]      = {"PUSH_RAX", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_PUSH, 0},
+	[X86_OP_PUSH_RSP]      = {"PUSH_RSP", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_PUSH, 0},
+	[X86_OP_PUSH_RBP]      = {"PUSH_RBP", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_PUSH, 0},
+	[X86_OP_POP_RBP]       = {"POP_RBP", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_POP, 0},
+	[X86_OP_POP_RSI]       = {"POP_RSI", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_POP, 0},
+	[X86_OP_JE]	       = {"JE [RIP + disp8]", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_JE, 0},
+	[X86_OP_JNE]	       = {"JNE [RIP + disp8]", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_JNE, 0},
+	[X86_OP_CMP_IMM]       = {"CMP_IMM", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_UNKNOWN, 1},
+	[X86_OP_ALU]	       = {"ALU", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_REX), ASMC_OP_UNKNOWN, 1},
+	[X86_OP_TEST]	       = {"TEST", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_REX), ASMC_OP_TEST, 1},
+	[X86_OP_MOV_REG]       = {"MOV_REG", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_REX), ASMC_OP_MOV_REG, 1},
+	[X86_OP_MOV_RIP]       = {"MOV_RIP", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_REX), ASMC_OP_MOV_RIP, 1},
+	[X86_OP_LEA]	       = {"LEA", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_REX), ASMC_OP_LEA, 1},
+	[X86_OP_NOP]	       = {"NOP", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_NOP, 0},
+	[X86_OP_MOV_EAX]       = {"MOV [EAX, imm32]", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_MOV_IMM, 0},
+	[X86_OP_SHR_SAR]       = {"SHR/SAR", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_REX), ASMC_OP_UNKNOWN, 1},
+	[X86_OP_RET]	       = {"RET", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_RET, 0},
+	[X86_OP_MOV_IMM8]      = {"MOV_IMM8", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_UNKNOWN, 1},
+	[X86_OP_MOV_IMM]       = {"MOV_IMM", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_REX), ASMC_OP_UNKNOWN, 1},
+	[X86_OP_SAR1]	       = {"SAR1", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_REX), ASMC_OP_UNKNOWN, 1},
+	[X86_OP_CALL]	       = {"CALL [RIP + disp32]", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_CALL_REL, 0},
+	[X86_OP_JMP]	       = {"JMP [rel32]", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_JMP_REL, 0},
+	[X86_OP_HLT]	       = {"HLT", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE), ASMC_OP_HLT, 0},
+	[X86_OP_JMP_CALL_PUSH] = {"JMP/CALL/PUSH", OP_SPEC_TYPE_OP, (1 << OP_SPEC_PRE_NONE) | (1 << OP_SPEC_PRE_REP), ASMC_OP_UNKNOWN, 1},
+	// Prefix
+	[X86_PREFIX_OP_SIZE] = {"+OPSIZE", OP_SPEC_TYPE_PREFIX, (1 << OP_SPEC_PRE_NONE), ASMC_OP_UNKNOWN, 0},
+	[X86_PREFIX_CS]	     = {"+CS", OP_SPEC_TYPE_PREFIX, (1 << OP_SPEC_PRE_OPSIZE), ASMC_OP_UNKNOWN, 0},
+	[X86_PREFIX_REP]     = {"+REP", OP_SPEC_TYPE_PREFIX, (1 << OP_SPEC_PRE_NONE), ASMC_OP_UNKNOWN, 0},
+	[X86_PREFIX_CET]     = {"+CET", OP_SPEC_TYPE_PREFIX, (1 << OP_SPEC_PRE_NONE), ASMC_OP_UNKNOWN, 0},
+	[X86_PREFIX_EXT]     = {"+EXT",
+				OP_SPEC_TYPE_PREFIX,
+				(1 << OP_SPEC_PRE_NONE) | (1 << OP_SPEC_PRE_OPSIZE) | (1 << OP_SPEC_PRE_CS) | (1 << OP_SPEC_PRE_CET),
+				ASMC_OP_UNKNOWN,
+				0},
+
+};
+
+static int parse_program_section(elfc_t *elfc, size_t off, u64 size, elf_ident_data_t data, elfc_sect_t *sect, alloc_t alloc)
+{
+	int prefix = 1 << OP_SPEC_PRE_NONE;
+	int rex_w;
+	int rex_r;
+	int rex_b;
+	int op_start = 0;
+	u64 addr     = off;
+
+	asmc_init(&sect->data.program.asmc, size, alloc);
+
+	size_t end = off + size;
+	while (off < end) {
+		asmc_op_t *op = NULL;
+		int is_op     = 0;
+		byte b;
+		read_byte(&elfc->bin, &b, &off);
+
+		if (s_op_spec[b].name) {
+			dputf(DST_STD(), "%s\n", s_op_spec[b].name);
+		}
+
+		byte cur       = b;
+		int cur_prefix = prefix;
+
+		if (s_op_spec[b].type == OP_SPEC_TYPE_OP) {
+			if (op_start == 0) {
+				addr = off - 1;
+			}
+		} else if (s_op_spec[b].type == OP_SPEC_TYPE_PREFIX) {
+			if (op_start == 0) {
+				addr	 = off - 1;
+				op_start = 1;
+			}
+		}
+
+		if (s_op_spec[b].op != ASMC_OP_UNKNOWN) {
+			op	 = arr_add(&sect->data.program.asmc.ops, NULL);
+			op->addr = addr;
+			op->type = s_op_spec[b].op;
+		}
+
+		byte mod;
+		if (s_op_spec[b].mod) {
+			read_byte(&elfc->bin, &b, &off);
+			mod = bits(b, 6, 0x3);
+		}
+
+		// mod reg r/m
+		switch (cur) {
+		case X86_OP_ADD: { // ADD r/m64, r64 (Add r64 to r/m64)
+			switch (mod) {
+			case 0x3: {
+				dputf(DST_STD(), "[REG64, REG64]\n");
+				op->s = read_reg64(bits(b, 3, 0x7));
+				op->d = read_reg64(bits(b, 0, 0x7));
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_SUB: { // SUB r/m64, r64 (Subtract r64 from r/m64)
+			switch (mod) {
+			case 0x3: {
+				dputf(DST_STD(), "[REG64, REG64]\n");
+				op->s = read_reg64(bits(b, 3, 0x7));
+				op->d = read_reg64(bits(b, 0, 0x7));
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_XOR: { // XOR r/m64, r64 (r/m64 XOR r64)
+			switch (mod) {
+			case 0x3: {
+				if (prefix & (1 << OP_SPEC_PRE_REX)) {
+					dputf(DST_STD(), "[REG64, REG64]\n");
+					op->s = read_reg64(rex_r * 8 + bits(b, 3, 0x7));
+					op->d = read_reg64(rex_b * 8 + bits(b, 0, 0x7));
+				} else {
+					dputf(DST_STD(), "[REG32, REG32]\n");
+					op->s = read_reg32(bits(b, 3, 0x7));
+					op->d = read_reg32(bits(b, 0, 0x7));
+				}
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_CMP: { // CMP r/m64,r64 (Compare r64 with r/m64)
+			switch (mod) {
+			case 0x3: {
+				dputf(DST_STD(), "[REG64, REG64]\n");
+				op->s = read_reg64(bits(b, 3, 0x7));
+				op->d = read_reg64(bits(b, 0, 0x7));
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_CMP_IMM: { // CMP r/m8, imm8 (Compare imm8 with r/m8)
+			switch (mod) {
+			case 0x0: {
+				byte reg = bits(b, 3, 0x7);
+				switch (reg) {
+				case 0x7: {
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_CMP_IMM8;
+					byte rm	      = bits(b, 0, 0x7);
+					switch (rm) {
+					case 0x5: {
+						dputf(DST_STD(), "[[RIP + disp32], imm8]\n");
+						if (data == ELF_IDENT_DATA_LE) {
+							read_val(&elfc->bin, &op->d, 4, &off);
+							read_val(&elfc->bin, &op->s, 1, &off);
+						} else {
+							log_error("reverse", "main", NULL, "unknown data: %d", data);
+						}
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown rm: %d", rm);
+						break;
+					}
+					}
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown reg: %d", reg);
+					break;
+				}
+				}
+
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_ALU: {
+			switch (mod) {
+			case 0x0: {
+				byte reg = bits(b, 3, 0x7);
+				switch (reg) {
+				case 0x7: { // CMP r/m64, imm8 (Compare imm8 with r/m64)
+					dputf(DST_STD(), "CMP [[RIP + disp32], imm8]\n");
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_CMP_IMM32;
+					byte rm	      = bits(b, 0, 0x7);
+					switch (rm) {
+					case 0x5: {
+						if (data == ELF_IDENT_DATA_LE) {
+							read_val(&elfc->bin, &op->d, 4, &off);
+							read_val(&elfc->bin, &op->s, 1, &off);
+						} else {
+							log_error("reverse", "main", NULL, "unknown data: %d", data);
+						}
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown rm: %d", rm);
+						break;
+					}
+					}
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown reg: %02X", reg);
+					break;
+				}
+				}
+				break;
+			}
+			case 0x3: {
+				byte reg = bits(b, 3, 0x7);
+				switch (reg) {
+				case 0x0: { // ADD r/m64, imm8 (Add sign-extended imm8 to r/m64)
+					dputf(DST_STD(), "ADD [REG64, IMM8]\n");
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_ADD_IMM;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(&elfc->bin, &op->s, 1, &off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+					break;
+				}
+				case 0x4: { // AND r/m64, imm8 (r/m64 AND imm8 (sign-extended))
+					dputf(DST_STD(), "AND [REG64, IMM8]\n");
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_AND;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(&elfc->bin, &op->s, 1, &off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+					break;
+				}
+				case 0x5: { // SUB r/m64, imm8 (Subtract sign-extended imm8 from r/m64)
+					dputf(DST_STD(), "SUB [REG64, IMM8]\n");
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_SUB_IMM;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(&elfc->bin, &op->s, 1, &off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown reg: %02X", reg);
+					break;
+				}
+				}
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_TEST: { // TEST r/m64, r64 (AND r64 with r/m64; set SF, ZF, PF according to result)
+			switch (mod) {
+			case 0x3: {
+				dputf(DST_STD(), "[REG64, REG64]\n");
+				op->s = read_reg64(bits(b, 3, 0x7));
+				op->d = read_reg64(bits(b, 0, 0x7));
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_MOV_REG: { // MOV r/m64, r64 (Move r64 to r/m64)
+			switch (mod) {
+			case 0x03: {
+				dputf(DST_STD(), "[REG64, REG64]\n");
+				op->s = read_reg64(bits(b, 3, 0x7));
+				op->d = read_reg64(rex_b * 8 + bits(b, 0, 0x7));
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_MOV_RIP: { // MOV r64, r/m64 (Move r/m64 to r64)
+			switch (mod) {
+			case 0x0: {
+				op->d	= read_reg64(bits(b, 3, 0x7));
+				byte rm = bits(b, 0, 0x7);
+				switch (rm) {
+				case 0x5: {
+					dputf(DST_STD(), "[REG64, [RIP + disp32]]\n");
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(&elfc->bin, &op->s, 4, &off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown rm: %d", rm);
+					break;
+				}
+				}
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_LEA: { // LEA r64,m (Store effective address for m in register r64)
+			switch (mod) {
+			case 0x0: {
+				op->d	= read_reg64(bits(b, 3, 0x7));
+				byte rm = bits(b, 0, 0x7);
+				switch (rm) {
+				case 0x5: {
+					dputf(DST_STD(), "[REG64, [RIP + disp32]]\n");
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(&elfc->bin, &op->s, 4, &off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown rm: %d", rm);
+					break;
+				}
+				}
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_NOP: { // NOP (One byte no-operation instruction)
+			op->d = 1;
+			break;
+		}
+		case X86_OP_MOV_EAX: { // MOV r32, imm32 (Move imm32 to r32)
+			op->d = ASMC_REG_EAX;
+			if (data == ELF_IDENT_DATA_LE) {
+				read_val(&elfc->bin, &op->s, 4, &off);
+			} else {
+				log_error("reverse", "main", NULL, "unknown data: %d", data);
+			}
+			break;
+		}
+		case X86_OP_SHR_SAR: { // SHR r/m64, imm8 (Unsigned divide r/m64 by 2, imm8 times)
+			switch (mod) {
+			case 0x3: {
+				byte reg = bits(b, 3, 0x7);
+				switch (reg) {
+				case 0x5: {
+					dputf(DST_STD(), "SHR [REG64, IMM8]\n");
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_SHR;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(&elfc->bin, &op->s, 1, &off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+					break;
+				}
+				case 0x7: {
+					dputf(DST_STD(), "SAR [REG64, IMM8]\n");
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_SAR;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(&elfc->bin, &op->s, 1, &off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown reg: %02X", reg);
+					break;
+				}
+				}
+
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_MOV_IMM8: { // MOV r/m8, imm8 (Move imm8 to r/m8)
+			switch (mod) {
+			case 0x0: {
+				byte reg = bits(b, 3, 0x7);
+				switch (reg) {
+				case 0x0: {
+					dputf(DST_STD(), "MOV_IMM8 [[RIP + disp32], imm8]\n");
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_MOV_IMM8;
+					byte rm	      = bits(b, 0, 0x7);
+					switch (rm) {
+					case 0x5: {
+						read_val(&elfc->bin, &op->d, 4, &off);
+						read_val(&elfc->bin, &op->s, 1, &off);
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown rm: %02X", rm);
+						break;
+					}
+					}
+
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown reg: %02X", reg);
+					break;
+				}
+				}
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_MOV_IMM: { // MOV r/m64, imm32 (Move imm32 sign extended to 64-bits to r/m64)
+			switch (mod) {
+			case 0x3: {
+				byte reg = bits(b, 3, 0x7);
+				switch (reg) {
+				case 0x0: {
+					dputf(DST_STD(), "MOV_IMM [REG64, IMM32]\n");
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_MOV_IMM;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
+					if (data == ELF_IDENT_DATA_LE) {
+						read_val(&elfc->bin, &op->s, 4, &off);
+					} else {
+						log_error("reverse", "main", NULL, "unknown data: %d", data);
+					}
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown reg: %02X", reg);
+					break;
+				}
+				}
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_PUSH_RSP: { // PUSH r64 (Push r64)
+			op->d = ASMC_REG_RSP;
+			break;
+		}
+		case X86_OP_PUSH_RBP: { // PUSH r64 (Push r64)
+			op->d = ASMC_REG_RBP;
+			break;
+		}
+		case X86_OP_PUSH_RAX: { // PUSH r64 (Push r64)
+			op->d = ASMC_REG_RAX;
+			break;
+		}
+		case X86_OP_POP_RBP: { // POP r64 (Pop top of stack into r64; increment stack pointer. Cannot encode 32-bit
+			// operand size.)
+			op->d = ASMC_REG_RBP;
+			break;
+		}
+		case X86_OP_POP_RSI: { // POP r64 (Pop top of stack into r64; increment stack pointer. Cannot encode 32-bit
+			// operand size.)
+			op->d = ASMC_REG_RSI;
+			break;
+		}
+		case X86_OP_JE: { // JE rel8 (Jump short if equal (ZF=1))
+			read_val(&elfc->bin, &op->d, 1, &off);
+			break;
+		}
+		case X86_OP_JNE: { // JNE rel8 (Jump short if not equal (ZF=0))
+			read_val(&elfc->bin, &op->d, 1, &off);
+			break;
+		}
+		case X86_OP_RET: { // RET (Near return to calling procedure.)
+			break;
+		}
+		case X86_OP_SAR1: { // SAR r/m64, 1 (Signed divide r/m64 by 2, once.)
+			switch (mod) {
+			case 0x3: {
+				byte reg = bits(b, 3, 0x7);
+				switch (reg) {
+				case 0x7: {
+					dputf(DST_STD(), "SAR1 [REG64]\n");
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_SAR;
+					op->s	      = 1;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown reg: %02X", reg);
+					break;
+				}
+				}
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_OP_CALL: { // CALL rel32 (Near return to calling procedure)
+			read_val(&elfc->bin, &op->d, 4, &off);
+			break;
+		}
+		case X86_OP_JMP: { // JMP rel32 (Jump near, relative, RIP = RIP + 32-bit displacement sign extended to 64-bits.)
+			read_val(&elfc->bin, &op->d, 4, &off);
+			break;
+		}
+		case X86_OP_HLT: { // HLT (Halt)
+			break;
+		}
+		case X86_OP_JMP_CALL_PUSH: { // JMP/CALL/PUSH
+			byte reg = bits(b, 3, 0x7);
+			switch (mod) {
+			case 0x0: {
+				switch (reg) {
+				case 0x2: { // CALL r/m64 (Call near, absolute indirect, address given in r/m64.)
+					dputf(DST_STD(), "CALL ");
+					if (prefix & (1 << OP_SPEC_PRE_REP)) {
+						log_error("reverse", "main", NULL, "prefix not expected: REP");
+					}
+					byte rm = bits(b, 0, 0x7);
+					switch (rm) {
+					case 0x5: {
+						dputf(DST_STD(), "[RIP + disp32]\n");
+						asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+						op->addr      = addr;
+						op->type      = ASMC_OP_CALL_RIP;
+						op->str_off   = 0;
+						if (data == ELF_IDENT_DATA_LE) {
+							read_val(&elfc->bin, &op->d, 4, &off);
+						} else {
+							log_error("reverse", "main", NULL, "unknown data: %d", data);
+						}
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown rm: %02X", rm);
+						break;
+					}
+					}
+					break;
+				}
+				case 0x4: {
+					dputf(DST_STD(), "JMP ");
+					if (!(prefix & (1 << OP_SPEC_PRE_REP))) {
+						log_error("reverse", "main", NULL, "prefix expected: REP");
+					}
+					byte rm = bits(b, 0, 0x7);
+					switch (rm) {
+					case 0x5: {
+						dputf(DST_STD(), "[RIP + disp32]\n");
+						asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+						op->addr      = addr;
+						op->type      = ASMC_OP_JMP_RIP;
+						op->str_off   = 0;
+						if (data == ELF_IDENT_DATA_LE) {
+							read_val(&elfc->bin, &op->d, 4, &off);
+						} else {
+							log_error("reverse", "main", NULL, "unknown data: %d", data);
+						}
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown rm: %02X", rm);
+						break;
+					}
+					}
+					break;
+				}
+				case 0x6: { // PUSH r/m32 (Push r/m32)
+					dputf(DST_STD(), "PUSH ");
+					if (prefix & (1 << OP_SPEC_PRE_REP)) {
+						log_error("reverse", "main", NULL, "prefix not expected: REP");
+					}
+
+					byte rm = bits(b, 0, 0x7);
+					switch (rm) {
+					case 0x5: {
+						dputf(DST_STD(), "[RIP + disp32]\n");
+						asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+						op->addr      = addr;
+						op->type      = ASMC_OP_PUSH_RIP;
+						op->str_off   = 0;
+						if (data == ELF_IDENT_DATA_LE) {
+							read_val(&elfc->bin, &op->d, 4, &off);
+						} else {
+							log_error("reverse", "main", NULL, "unknown data: %d", data);
+						}
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown rm: %02X", rm);
+						break;
+					}
+					}
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown reg: %02X", reg);
+					break;
+				}
+				}
+				break;
+			}
+			case 0x3: {
+				if (prefix & (1 << OP_SPEC_PRE_REP)) {
+					log_error("reverse", "main", NULL, "prefix not expected: REP");
+				}
+				switch (reg) {
+				case 0x2: { // CALL r/m64 (Call near, absolute indirect, address given in r/m64)
+					dputf(DST_STD(), "CALL [REG64]\n");
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_CALL_REG;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
+					break;
+				}
+				case 0x4: { // JMP r/m64 (Jump near, absolute indirect, RIP = 64-Bit offset from register or
+					    // memory.)
+					dputf(DST_STD(), "JMP [REG64]\n");
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_JMP_REG;
+					op->d	      = read_reg64(bits(b, 0, 0x7));
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown reg: %02X", reg);
+					break;
+				}
+				}
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+				break;
+			}
+			}
+			break;
+		}
+		case X86_PREFIX_OP_SIZE: {
+			prefix &= ~(1 << OP_SPEC_PRE_NONE);
+			prefix |= 1 << OP_SPEC_PRE_OPSIZE;
+			break;
+		}
+		case X86_PREFIX_CS: { // CS segment prefix
+			prefix &= ~(1 << OP_SPEC_PRE_NONE);
+			prefix |= 1 << OP_SPEC_PRE_CS;
+			break;
+		}
+		case X86_PREFIX_REP: { // REP prefix
+			prefix &= ~(1 << OP_SPEC_PRE_NONE);
+			prefix |= 1 << OP_SPEC_PRE_REP;
+			break;
+		}
+		case X86_PREFIX_CET: { // CET prefix
+			prefix &= ~(1 << OP_SPEC_PRE_NONE);
+			prefix |= 1 << OP_SPEC_PRE_CET;
+			break;
+		}
+		case X86_PREFIX_EXT: { // Extended opcode prefix
+			read_byte(&elfc->bin, &b, &off);
+			switch (b) {
+			case X86_EXT_SYSCALL: {
+				dputf(DST_STD(), "SYSCALL\n");
+				asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+				op->addr      = addr;
+				op->type      = ASMC_OP_SYSCALL;
+				is_op	      = 1;
+				break;
+			}
+			case X86_EXT_OPCODE_GROUP: { // extended opcode group
+				dputf(DST_STD(), "EXTENDED OPCODE_GROUP\n");
+				read_byte(&elfc->bin, &b, &off);
+				switch (b) {
+				case X86_EXT_OPCODE_ENDBR64: {
+					dputf(DST_STD(), "ENDBR64\n");
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_ENDBR64;
+					is_op	      = 1;
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown CET opcode: %02X", b);
+					break;
+				}
+				}
+				is_op = 1;
+				break;
+			}
+			case X86_EXT_NOP: {
+				dputf(DST_STD(), "NOP\n");
+				read_byte(&elfc->bin, &b, &off);
+				byte mod = bits(b, 6, 0x3);
+				switch (mod) {
+				case 0x0: {
+					byte reg = bits(b, 3, 0x7);
+					switch (reg) {
+					case 0x0: {
+						dputf(DST_STD(), "[REG64]\n");
+						asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+						op->addr      = addr;
+						op->type      = ASMC_OP_NOP;
+						op->d	      = 0;
+						op->d++; // EXT
+						op->d++; // NOP
+						op->d++; // MODRM
+						break;
+					}
+					default: {
+						log_error("reverse", "main", NULL, "unknown reg: %02X", reg);
+						break;
+					}
+					}
+					break;
+				}
+				case 0x01: {
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_NOP;
+					op->d	      = 0;
+					if (prefix & (1 << OP_SPEC_PRE_OPSIZE)) {
+						op->d++;
+					}
+					op->d++; // EXT
+					op->d++; // NOP
+					op->d++; // MODRM
+					int sib = bits(b, 0, 0x7) == 0x4;
+					if (sib) {
+						op->d++;
+						dputf(DST_STD(), "[REG64 + REG64 + disp8]\n");
+						read_byte(&elfc->bin, &b, &off);
+						dputf(DST_STD(), "SIB\n");
+						op->sib = b;
+					} else {
+						dputf(DST_STD(), "[REG64 + disp8]\n");
+					}
+
+					op->d += 1;
+					read_val(&elfc->bin, &op->s, 1, &off);
+					break;
+				}
+				case 0x02: {
+					asmc_op_t *op = arr_add(&sect->data.program.asmc.ops, NULL);
+					op->addr      = addr;
+					op->type      = ASMC_OP_NOP;
+					op->d	      = 0;
+					if (prefix & (1 << OP_SPEC_PRE_OPSIZE)) {
+						op->d++;
+					}
+					if (prefix & (1 << OP_SPEC_PRE_CS)) {
+						op->d++;
+					}
+					op->d++; // EXT
+					op->d++; // NOP
+					op->d++; // MODRM
+					int sib = bits(b, 0, 0x7) == 0x4;
+					if (sib) {
+						dputf(DST_STD(), "[REG64 + REG64 + disp32]\n");
+						op->d++;
+						read_byte(&elfc->bin, &b, &off);
+						dputf(DST_STD(), "SIB\n");
+						op->sib = b;
+					} else {
+						dputf(DST_STD(), "[REG64 + disp32]\n");
+					}
+
+					op->d += 4;
+					read_val(&elfc->bin, &op->s, 4, &off);
+					break;
+				}
+				default: {
+					log_error("reverse", "main", NULL, "unknown mod: %02X", mod);
+					break;
+				}
+				}
+				is_op = 1;
+				break;
+			}
+			default: {
+				log_error("reverse", "main", NULL, "unknown EXT prefix: %02X", b);
+				break;
+			}
+			}
+			break;
+		}
+		default: {
+			if (bits(b, 4, 0xF) == 0x4) {	 // REX
+				rex_w = bits(b, 3, 0x1); // REX.W (64 Bit Operand Size)
+				rex_r = bits(b, 2, 0x1); // REX.R (Extension of the ModR/M reg field)
+				rex_b = bits(b, 0, 0x1); // REX.B (Extension of the ModR/M r/m field, SIB base field, or Opcode reg field)
+				dputf(DST_STD(), "+REX.%s%s%s\n", rex_w ? "W" : "", rex_r ? "R" : "", rex_b ? "B" : "");
+				if (prefix & ~(1 << OP_SPEC_PRE_NONE)) {
+					log_error("reverse", "main", NULL, "prefix expected: NONE");
+				}
+				if (op_start == 0) {
+					addr	 = off - 1;
+					op_start = 1;
+				}
+				prefix = 1 << OP_SPEC_PRE_REX;
+			} else {
+				log_error("reverse", "main", NULL, "unknown opcode: %02X", b);
+			}
+			break;
+		}
+		}
+
+		if (s_op_spec[cur].type) {
+			int found = cur_prefix & s_op_spec[cur].prefix;
+			if (!found) {
+				for (int i = OP_SPEC_PRE_NONE; i < __OP_SPEC_PRE_CNT; i++) {
+					if (s_op_spec[cur].prefix & (1 << i)) {
+						log_error("reverse", "main", NULL, "prefix expected: %s", s_prefix_str[i]);
+					}
+				}
+			}
+
+			int not_expected = cur_prefix & ~s_op_spec[cur].prefix;
+			if (not_expected & (1 << OP_SPEC_PRE_NONE)) {
+				log_error("reverse", "main", NULL, "prefix expected");
+			}
+			for (int i = OP_SPEC_PRE_NONE + 1; i < __OP_SPEC_PRE_CNT; i++) {
+				if (not_expected & (1 << i)) {
+					log_error("reverse", "main", NULL, "prefix not expected: %s", s_prefix_str[i]);
+				}
+			}
+		}
+
+		if (s_op_spec[cur].type == OP_SPEC_TYPE_OP || is_op) {
+			prefix	 = 1 << OP_SPEC_PRE_NONE;
+			op_start = 0;
+		}
+	}
+
+	return 0;
+}
+
+static elfc_sect_t *find_sect(const elfc_t *elfc, u64 addr)
+{
+	elfc_sect_t *sect;
+	uint i = 0;
+	arr_foreach(&elfc->sects, i, sect)
+	{
+		if (sect->addr == addr) {
+			return sect;
+		}
+	}
+
+	return NULL;
+}
+
+int elfc_read(elfc_t *elfc, fs_t *fs, strv_t path, alloc_t alloc)
 {
 	if (elfc == NULL) {
 		return 1;
@@ -620,22 +2186,25 @@ int elfc_read(elfc_t *elfc, fs_t *fs, strv_t path)
 	sect->type = ELF_SECT_TYPE_ELF_IDENT;
 	strvbuf_add(&elfc->strs, STRV("elf_ident"), &sect->label);
 	sect->addr = off;
-	parse_elf_ident(elfc, &off, sect);
+	parse_elf_ident(elfc, &off, sect, alloc);
 	sect->size = off - sect->addr;
 	dputf(DST_STD(), "[ELF IDENT]\n");
 	schema_print_data(&sect->data.elf_ident.schema, 0, sect->data.elf_ident.data, DST_STD());
+	dputf(DST_STD(), "\n");
 
 	u8 class = *(u8 *)schema_get_val(&sect->data.elf_ident.schema, ELF_IDENT_CLASS, sect->data.elf_ident.data);
+	u8 data	 = *(u8 *)schema_get_val(&sect->data.elf_ident.schema, ELF_IDENT_DATA, sect->data.elf_ident.data);
 
 	log_info("reverse", "elfc", NULL, "Parsing ELF header");
 	sect	   = arr_add(&elfc->sects, NULL);
 	sect->type = ELF_SECT_TYPE_ELF_HEADER;
 	strvbuf_add(&elfc->strs, STRV("elf_header"), &sect->label);
 	sect->addr = off;
-	parse_elf_header(elfc, &off, class, sect);
+	parse_elf_header(elfc, &off, class, sect, alloc);
 	sect->size = off - sect->addr;
 	dputf(DST_STD(), "[ELF header]\n");
 	schema_print_data(&sect->data.elf_header.schema, 0, sect->data.elf_header.data, DST_STD());
+	dputf(DST_STD(), "\n");
 
 	u16 phentsize = *(u16 *)schema_get_val(&sect->data.elf_header.schema, ELF_HEADER_PHENTSIZE, sect->data.elf_ident.data);
 	u16 phnum     = *(u16 *)schema_get_val(&sect->data.elf_header.schema, ELF_HEADER_PHNUM, sect->data.elf_ident.data);
@@ -650,73 +2219,139 @@ int elfc_read(elfc_t *elfc, fs_t *fs, strv_t path)
 	sect->type = ELF_SECT_TYPE_PROGRAM_HEADER;
 	strvbuf_add(&elfc->strs, STRV("program_header"), &sect->label);
 	sect->addr = phoff;
-	parse_program_header(elfc, phoff, class, phnum, phentsize, sect);
+	parse_program_header(elfc, phoff, class, phnum, phentsize, sect, alloc);
 	sect->size = phentsize * phnum;
 	dputf(DST_STD(), "[Program header]\n");
 	tbl_print(&sect->data.program_header.tbl, DST_STD());
+	dputf(DST_STD(), "\n");
 
 	log_info("reverse", "elfc", NULL, "Parsing section header");
 	sect	   = arr_add(&elfc->sects, &elfc->section_header);
 	sect->type = ELF_SECT_TYPE_SECTION_HEADER;
 	strvbuf_add(&elfc->strs, STRV("section_header"), &sect->label);
 	sect->addr = shoff;
-	parse_section_header(elfc, shoff, class, shnum, shentsize, shstrndx, sect);
+	parse_section_header(elfc, shoff, class, shnum, shentsize, shstrndx, sect, alloc);
 	sect->size = shentsize * shnum;
 	dputf(DST_STD(), "[Section header]\n");
 	tbl_print(&sect->data.section_header.tbl, DST_STD());
+	dputf(DST_STD(), "\n");
 
 	log_info("reverse", "elfc", NULL, "Parsing sections");
 	uint section_header_cnt = sect->data.section_header.tbl.rows.cnt;
+
+	u64 dynstr_off;
+	uint dynsym_id;
+
+	for (uint i = 0; i < section_header_cnt; i++) {
+		sect = arr_get(&elfc->sects, elfc->section_header);
+
+		size_t name_off = *(size_t *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_NAME);
+		strv_t name	= strvbuf_get(&sect->data.section_header.tbl.strs, name_off);
+		if (name.len > 0) {
+			u64 offset = *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_OFFSET);
+			u64 size   = *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_SIZE);
+
+			uint id;
+			sect	   = arr_add(&elfc->sects, &id);
+			sect->type = ELF_SECT_TYPE_SECTION;
+			strvbuf_add(&elfc->strs, name, &sect->label);
+			strv_t label = strvbuf_get(&elfc->strs, sect->label);
+			if (strv_eq(label, STRV(".dynstr"))) {
+				dynstr_off = offset;
+			} else if (strv_eq(label, STRV(".dynsym"))) {
+				dynsym_id = id;
+			}
+
+			for (uint i = 0; i < label.len; i++) {
+				if (label.data[i] == '.' || label.data[i] == '-') {
+					((char *)label.data)[i] = '_';
+				}
+			}
+			sect->addr = offset;
+			sect->size = size;
+		}
+	}
 
 	for (uint i = 0; i < section_header_cnt; i++) {
 		sect	 = arr_get(&elfc->sects, elfc->section_header);
 		u32 type = *(u32 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_TYPE);
 		switch (type) {
 		case SECTION_HEADER_TYPE_STRTAB: {
-			size_t name_off = *(size_t *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_NAME);
-			strv_t name	= strvbuf_get(&sect->data.section_header.tbl.strs, name_off);
-			u64 offset	= *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_OFFSET);
-			u64 size	= *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_SIZE);
-			/*if (strv_eq(name, STRV(".shstrtab"))) {
-				log_info("reverse", "elfc", NULL, "skpping: %.*s", name.len, name.data);
-				break;
-			}*/
-
-			sect	   = arr_add(&elfc->sects, NULL);
-			sect->type = ELF_SECT_TYPE_STRTAB;
-			strvbuf_add(&elfc->strs, name, &sect->label);
-			sect->addr = offset;
-			dputf(DST_STD(), "\n[%.*s]\n", name.len, name.data);
-			parse_strtab_section(elfc, offset, size, sect);
-			sect->size = size;
+			u64 offset   = *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_OFFSET);
+			sect	     = find_sect(elfc, offset);
+			sect->type   = ELF_SECT_TYPE_STRTAB;
+			strv_t label = strvbuf_get(&elfc->strs, sect->label);
+			log_info("reverse", "elfc", NULL, "Parsing %.*s", label.len, label.data);
+			dputf(DST_STD(), "[%.*s]\n", label.len, label.data);
+			parse_strtab_section(elfc, offset, sect->size, sect, alloc);
+			dputf(DST_STD(), "\n");
 			break;
 		}
-		default: {
-			size_t name_off = *(size_t *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_NAME);
-			strv_t name	= strvbuf_get(&sect->data.section_header.tbl.strs, name_off);
-			/*if (strv_eq(name, STRV(".bss"))) {
-				log_info("reverse", "elfc", NULL, "skpping: %.*s", name.len, name.data);
-				break;
-			}
-			if (strv_eq(name, STRV(".eh_frame"))) {
-				log_info("reverse", "elfc", NULL, "skpping: %.*s", name.len, name.data);
-				break;
-			}
-			if (strv_eq(name, STRV(".interp"))) {
-				log_info("reverse", "elfc", NULL, "skpping: %.*s", name.len, name.data);
-				break;
-			}*/
-			if (name.len > 0) {
-				u64 offset = *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_OFFSET);
-				u64 size   = *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_SIZE);
+		case SECTION_HEADER_TYPE_DYNAMIC: {
+			u64 offset   = *(u64 *)tbl_get_cell(&sect->data.dynamic.tbl, i, SECTION_HEADER_OFFSET);
+			sect	     = find_sect(elfc, offset);
+			sect->type   = ELF_SECT_TYPE_DYNAMIC;
+			strv_t label = strvbuf_get(&elfc->strs, sect->label);
+			log_info("reverse", "elfc", NULL, "Parsing %.*s", label.len, label.data);
+			parse_dynamic_section(elfc, offset, sect->size, class, sect, alloc);
+			dputf(DST_STD(), "[%.*s]\n", label.len, label.data);
+			tbl_print(&sect->data.dynamic.tbl, DST_STD());
+			dputf(DST_STD(), "\n");
+			break;
+		}
+		case SECTION_HEADER_TYPE_DYNSYM: {
+			u64 offset   = *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_OFFSET);
+			sect	     = find_sect(elfc, offset);
+			sect->type   = ELF_SECT_TYPE_DYNSYM;
+			strv_t label = strvbuf_get(&elfc->strs, sect->label);
+			log_info("reverse", "elfc", NULL, "Parsing %.*s", label.len, label.data);
+			parse_dynsym_section(elfc, offset, sect->size, class, dynstr_off, sect, alloc);
+			dputf(DST_STD(), "[%.*s]\n", label.len, label.data);
+			tbl_print(&sect->data.dynsym.tbl, DST_STD());
+			dputf(DST_STD(), "\n");
+			break;
+		}
+		}
+	}
 
-				sect	   = arr_add(&elfc->sects, NULL);
-				sect->type = ELF_SECT_TYPE_SECTION;
-				strvbuf_add(&elfc->strs, name, &sect->label);
-				sect->addr = offset;
-				dputf(DST_STD(), "\n[%.*s]\n", name.len, name.data);
-				sect->size = size;
+	for (uint i = 0; i < section_header_cnt; i++) {
+		sect	 = arr_get(&elfc->sects, elfc->section_header);
+		u32 type = *(u32 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_TYPE);
+		switch (type) {
+		case SECTION_HEADER_TYPE_RELA: {
+			u64 offset   = *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_OFFSET);
+			sect	     = find_sect(elfc, offset);
+			sect->type   = ELF_SECT_TYPE_RELADYN;
+			strv_t label = strvbuf_get(&elfc->strs, sect->label);
+			log_info("reverse", "elfc", NULL, "Parsing %.*s", label.len, label.data);
+			parse_reladyn_section(elfc, offset, sect->size, class, dynsym_id, sect, alloc);
+			dputf(DST_STD(), "[%.*s]\n", label.len, label.data);
+			tbl_print(&sect->data.reladyn.tbl, DST_STD());
+			dputf(DST_STD(), "\n");
+			break;
+		}
+		}
+	}
+
+	for (uint i = 0; i < section_header_cnt; i++) {
+		sect	 = arr_get(&elfc->sects, elfc->section_header);
+		u32 type = *(u32 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_TYPE);
+		switch (type) {
+		case SECTION_HEADER_TYPE_PROGBITS: {
+			u64 flags = *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_FLAGS);
+			if (flags & (1 << SECTION_HEADER_FLAG_EXECINSTR)) {
+				u64 offset   = *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_OFFSET);
+				sect	     = find_sect(elfc, offset);
+				sect->type   = ELF_SECT_TYPE_PROGRAM;
+				strv_t label = strvbuf_get(&elfc->strs, sect->label);
+				log_info("reverse", "elfc", NULL, "Parsing %.*s", label.len, label.data);
+				parse_program_section(elfc, offset, sect->size, data, sect, alloc);
+				dputf(DST_STD(), "\n");
+				dputf(DST_STD(), "[%.*s]\n", label.len, label.data);
+				asmc_dbg(&sect->data.program.asmc, DST_STD());
+				dputf(DST_STD(), "\n");
 			}
+
 			break;
 		}
 		}
@@ -725,20 +2360,6 @@ int elfc_read(elfc_t *elfc, fs_t *fs, strv_t path)
 	return 0;
 }
 
-static elfc_sect_t *find_sect(const elfc_t *elfc, u64 addr)
-{
-	elfc_sect_t *sect;
-	uint i = 0;
-	arr_foreach(&elfc->sects, i, sect)
-	{
-		if (sect->addr == addr) {
-			return sect;
-		}
-	}
-
-	return NULL;
-}
-/*
 static int elfc_asmc_schema(asmc_t *asmc, const schema_t *schema, const strv_t *labels, void *data, uint layout, int multi, uint id)
 {
 	const schema_layout_t *l = schema_get_layout(schema, layout);
@@ -847,7 +2468,58 @@ static strv_t s_section_header_labels[] = {
 	[SECTION_HEADER_ALIGN]	  = STRVT("section_header_align"),
 	[SECTION_HEADER_ENTSIZE]  = STRVT("section_header_entsize"),
 };
-*/
+
+static strv_t s_dynamic_section_labels[] = {
+	[DYNAMIC_SECTION_TAG]	  = STRVT("dynamic_section_tag"),
+	[DYNAMIC_SECTION_VAL]	  = STRVT("dynamic_section_val"),
+	[DYNAMIC_SECTION_VAL_STR] = STRVT("dynamic_section_val"),
+};
+
+static strv_t s_dynsym_section_labels[] = {
+	[DYNSYM_SECTION_NAME_OFF] = STRVT("dynsym_section_name"),
+	[DYNSYM_SECTION_INFO]	  = STRVT("dynsym_section_info"),
+	[DYNSYM_SECTION_TYPE]	  = STRVT("dynsym_section_type"),
+	[DYNSYM_SECTION_BIND]	  = STRVT("dynsym_section_bind"),
+	[DYNSYM_SECTION_OTHER]	  = STRVT("dynsym_section_other"),
+	[DYNSYM_SECTION_INDEX]	  = STRVT("dynsym_section_index"),
+	[DYNSYM_SECTION_VALUE]	  = STRVT("dynsym_section_value"),
+	[DYNSYM_SECTION_SIZE]	  = STRVT("dynsym_section_size"),
+	[DYNSYM_SECTION_NAME]	  = STRVT("dynsym_section_name"),
+};
+
+static strv_t s_reladyn_section_labels[] = {
+	[RELADYN_SECTION_OFFSET] = STRVT("reladyn_section_offset"),
+	[RELADYN_SECTION_TYPE]	 = STRVT("reladyn_section_type"),
+	[RELADYN_SECTION_BIND]	 = STRVT("reladyn_section_bind"),
+	[RELADYN_SECTION_ADDEND] = STRVT("reladyn_section_addend"),
+	[RELADYN_SECTION_NAME]	 = STRVT("reladyn_section_name"),
+};
+
+static int elfc_asmc_unknown_zeros(asmc_t *asmc, uint *unknown_zeros)
+{
+	if (*unknown_zeros > 0) {
+		if (*unknown_zeros > 3) {
+			asmc_op_t *op = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_REPT;
+			op->d	      = *unknown_zeros;
+			op	      = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_BYTE;
+			op->d	      = 0;
+			op	      = arr_add(&asmc->ops, NULL);
+			op->type      = ASMC_OP_ENDR;
+		} else {
+			for (uint i = 0; i < *unknown_zeros; i++) {
+
+				asmc_op_t *op = arr_add(&asmc->ops, NULL);
+				op->type      = ASMC_OP_BYTE;
+				op->d	      = 0;
+			}
+		}
+		*unknown_zeros = 0;
+	}
+	return 0;
+}
+
 int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 {
 	if (elfc == NULL || asmc == NULL) {
@@ -856,18 +2528,19 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 
 	asmc_op_t *op;
 
-	/*char unknown_buf[32] = {0};
+	char unknown_buf[32] = {0};
 	dst_t unknown	     = DST_BUFN(unknown_buf, sizeof(unknown_buf));
 	unknown.off += dputf(unknown, "unknown_");
 	size_t unknown_len = unknown.off;
 	uint unknown_cnt   = 0;
-	int label	   = 0;*/
+	int label	   = 0;
+	uint unknown_zeros = 0;
 
 	u64 addr = 0;
 	while (addr < elfc->bin.buf.used) {
 		elfc_sect_t *sect = find_sect(elfc, addr);
 		if (sect == NULL) {
-			/*if (label == 0) {
+			if (label == 0) {
 				op	 = arr_add(&asmc->ops, NULL);
 				op->type = ASMC_OP_LABEL;
 				unknown.off += dputf(unknown, "%d", unknown_cnt);
@@ -877,34 +2550,41 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 				label = 1;
 			}
 
-			op	 = arr_add(&asmc->ops, NULL);
-			op->type = ASMC_OP_BYTE;
-			op->d	 = *(byte *)buf_get(&elfc->bin.buf, addr);*/
+			if (op->d == 0) {
+				unknown_zeros++;
+			} else {
+				elfc_asmc_unknown_zeros(asmc, &unknown_zeros);
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_BYTE;
+				op->d	 = *(byte *)buf_get(&elfc->bin.buf, addr);
+			}
+
 			addr++;
 		} else {
+			elfc_asmc_unknown_zeros(asmc, &unknown_zeros);
 			switch (sect->type) {
 			case ELF_SECT_TYPE_BYTES: {
-				/*op	 = arr_add(&asmc->ops, NULL);
+				op	 = arr_add(&asmc->ops, NULL);
 				op->type = ASMC_OP_LABEL;
 				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
 				for (uint off = 0; off < sect->size; off++) {
 					op	 = arr_add(&asmc->ops, NULL);
 					op->type = ASMC_OP_BYTE;
 					op->d	 = *(u8 *)buf_get(&elfc->bin.buf, sect->addr + off);
-				}*/
+				}
 				break;
 			}
 			case ELF_SECT_TYPE_MAGIC: {
-				/*op	 = arr_add(&asmc->ops, NULL);
+				op	 = arr_add(&asmc->ops, NULL);
 				op->type = ASMC_OP_LABEL;
 				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
 				op	 = arr_add(&asmc->ops, NULL);
 				op->type = ASMC_OP_LONG;
-				op->d	 = *(u32 *)buf_get(&elfc->bin.buf, sect->addr);*/
+				op->d	 = *(u32 *)buf_get(&elfc->bin.buf, sect->addr);
 				break;
 			}
 			case ELF_SECT_TYPE_ELF_IDENT: {
-				/*op	 = arr_add(&asmc->ops, NULL);
+				op	 = arr_add(&asmc->ops, NULL);
 				op->type = ASMC_OP_LABEL;
 				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
 				elfc_asmc_schema(asmc,
@@ -913,11 +2593,11 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 						 sect->data.elf_ident.data,
 						 sect->data.elf_ident.layout,
 						 0,
-						 0);*/
+						 0);
 				break;
 			}
 			case ELF_SECT_TYPE_ELF_HEADER: {
-				/*op	 = arr_add(&asmc->ops, NULL);
+				op	 = arr_add(&asmc->ops, NULL);
 				op->type = ASMC_OP_LABEL;
 				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
 				elfc_asmc_schema(asmc,
@@ -926,11 +2606,11 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 						 sect->data.elf_header.data,
 						 sect->data.elf_header.layout,
 						 0,
-						 0);*/
+						 0);
 				break;
 			}
 			case ELF_SECT_TYPE_PROGRAM_HEADER: {
-				/*op	 = arr_add(&asmc->ops, NULL);
+				op	 = arr_add(&asmc->ops, NULL);
 				op->type = ASMC_OP_LABEL;
 				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
 				void *row;
@@ -944,11 +2624,11 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 							 sect->data.program_header.layout,
 							 1,
 							 i);
-				}*/
+				}
 				break;
 			}
 			case ELF_SECT_TYPE_SECTION_HEADER: {
-				/*op	 = arr_add(&asmc->ops, NULL);
+				op	 = arr_add(&asmc->ops, NULL);
 				op->type = ASMC_OP_LABEL;
 				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
 				void *row;
@@ -962,18 +2642,13 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 							 sect->data.section_header.layout,
 							 1,
 							 i);
-				}*/
+				}
 				break;
 			}
 			case ELF_SECT_TYPE_STRTAB: {
-				strv_t label = strvbuf_get(&elfc->strs, sect->label);
-				if (strv_eq(label, STRV(".shstrtab"))) {
-					log_info("reverse", "elfc", NULL, "skpping: %.*s", label.len, label.data);
-					break;
-				}
 				op	 = arr_add(&asmc->ops, NULL);
-				op->type = ASMC_OP_SECTION;
-				strvbuf_add(&asmc->strs, label, &op->str);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
 				size_t *str_off;
 				uint i = 0;
 				arr_foreach(&sect->data.strtab.strs, i, str_off)
@@ -984,25 +2659,99 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 				}
 				break;
 			}
+			case ELF_SECT_TYPE_DYNAMIC: {
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
+				void *row;
+				uint i = 0;
+				row_foreach(&sect->data.dynamic.tbl, i, row)
+				{
+					elfc_asmc_schema(asmc,
+							 &sect->data.dynamic.tbl.schema,
+							 s_dynamic_section_labels,
+							 row,
+							 sect->data.dynamic.layout,
+							 1,
+							 i);
+				}
+				break;
+			}
+			case ELF_SECT_TYPE_DYNSYM: {
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
+				void *row;
+				uint i = 0;
+				row_foreach(&sect->data.dynsym.tbl, i, row)
+				{
+					elfc_asmc_schema(asmc,
+							 &sect->data.dynsym.tbl.schema,
+							 s_dynsym_section_labels,
+							 row,
+							 sect->data.dynsym.layout,
+							 1,
+							 i);
+				}
+				break;
+			}
+			case ELF_SECT_TYPE_RELADYN: {
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
+				void *row;
+				uint i = 0;
+				row_foreach(&sect->data.reladyn.tbl, i, row)
+				{
+					elfc_asmc_schema(asmc,
+							 &sect->data.reladyn.tbl.schema,
+							 s_reladyn_section_labels,
+							 row,
+							 sect->data.reladyn.layout,
+							 1,
+							 i);
+				}
+				break;
+			}
+			case ELF_SECT_TYPE_PROGRAM: {
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
+				const asmc_op_t *op;
+				uint i = 0;
+				arr_foreach(&sect->data.program.asmc.ops, i, op)
+				{
+					asmc_op_t *d = arr_add(&asmc->ops, NULL);
+					d->addr	     = op->addr;
+					d->type	     = op->type;
+					d->d	     = op->d;
+					d->s	     = op->s;
+					d->sib	     = op->sib;
+					d->str_off   = op->str_off;
+					if (op->str_off) {
+						strvbuf_add(&asmc->strs, strvbuf_get(&sect->data.program.asmc.strs, op->str), &d->str);
+						d->off = op->off;
+					}
+					switch (op->type) {
+					case ASMC_OP_SECTION:
+					case ASMC_OP_GLOBAL:
+					case ASMC_OP_LABEL:
+					case ASMC_OP_STRING: {
+						strvbuf_add(&asmc->strs, strvbuf_get(&sect->data.program.asmc.strs, op->str), &d->str);
+						break;
+					}
+					default: break;
+					}
+				}
+				break;
+			}
 			case ELF_SECT_TYPE_SECTION: {
 				strv_t label = strvbuf_get(&elfc->strs, sect->label);
-				if (strv_eq(label, STRV(".bss"))) {
-					log_info("reverse", "elfc", NULL, "skpping: %.*s", label.len, label.data);
-					break;
-				}
-				if (strv_eq(label, STRV(".eh_frame"))) {
-					log_info("reverse", "elfc", NULL, "skpping: %.*s", label.len, label.data);
-					break;
-				}
-				if (strv_eq(label, STRV(".interp"))) {
-					log_info("reverse", "elfc", NULL, "skpping: %.*s", label.len, label.data);
-					break;
-				}
-				op	 = arr_add(&asmc->ops, NULL);
-				op->type = ASMC_OP_SECTION;
-				strvbuf_add(&asmc->strs, label, &op->str);
+				op	     = arr_add(&asmc->ops, NULL);
+				op->type     = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
 				for (uint off = 0; off < sect->size; off++) {
-					if (strv_eq(label, STRV(".text")) && off == 16) {
+					if (strv_eq(label, STRV("_text")) && off == 16) {
 						op	 = arr_add(&asmc->ops, NULL);
 						op->type = ASMC_OP_GLOBAL;
 						strvbuf_add(&asmc->strs, STRV("_start"), &op->str);
@@ -1022,7 +2771,7 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 				break;
 			}
 			}
-			// label = 0;
+			label = 0;
 			addr += sect->size;
 		}
 	}

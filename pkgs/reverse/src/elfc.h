@@ -15,8 +15,26 @@ typedef enum elfc_sect_type_e {
 	ELF_SECT_TYPE_PROGRAM_HEADER,
 	ELF_SECT_TYPE_SECTION_HEADER,
 	ELF_SECT_TYPE_STRTAB,
+	ELF_SECT_TYPE_DYNAMIC,
+	ELF_SECT_TYPE_DYNSYM,
+	ELF_SECT_TYPE_RELADYN,
+	ELF_SECT_TYPE_PROGRAM,
 	ELF_SECT_TYPE_SECTION,
 } elfc_sect_type_t;
+
+enum {
+	SECTION_HEADER_NAME_OFF,
+	SECTION_HEADER_NAME,
+	SECTION_HEADER_TYPE,
+	SECTION_HEADER_FLAGS,
+	SECTION_HEADER_ADDR,
+	SECTION_HEADER_OFFSET,
+	SECTION_HEADER_SIZE,
+	SECTION_HEADER_LINK,
+	SECTION_HEADER_INFO,
+	SECTION_HEADER_ALIGN,
+	SECTION_HEADER_ENTSIZE,
+};
 
 typedef struct elfc_sect_s {
 	elfc_sect_type_t type;
@@ -45,6 +63,21 @@ typedef struct elfc_sect_s {
 		struct {
 			arr_t strs;
 		} strtab;
+		struct {
+			tbl_t tbl;
+			uint layout;
+		} dynsym;
+		struct {
+			tbl_t tbl;
+			uint layout;
+		} reladyn;
+		struct {
+			asmc_t asmc;
+		} program;
+		struct {
+			tbl_t tbl;
+			uint layout;
+		} dynamic;
 	} data;
 } elfc_sect_t;
 
@@ -58,7 +91,7 @@ typedef struct elfc_s {
 elfc_t *elfc_init(elfc_t *elfc, alloc_t alloc);
 void elfc_free(elfc_t *elfc);
 
-int elfc_read(elfc_t *elfc, fs_t *fs, strv_t path);
+int elfc_read(elfc_t *elfc, fs_t *fs, strv_t path, alloc_t alloc);
 
 int elfc_asmc(const elfc_t *elfc, asmc_t *asmc);
 

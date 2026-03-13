@@ -73,6 +73,7 @@ size_t asmc_dbg(const asmc_t *asmc, dst_t dst)
 	asmc_op_t *op;
 	arr_foreach(&asmc->ops, i, op)
 	{
+		dst.off += dputf(dst, "0x%04X: ", op->addr);
 		switch (op->type) {
 		case ASMC_OP_SECTION: {
 			strv_t str = strvbuf_get(&asmc->strs, op->str);
@@ -423,9 +424,26 @@ size_t asmc_print(const asmc_t *asmc, dst_t dst)
 			dst.off += dputf(dst, "\t.string \"%.*s\"", str.len, str.data);
 			break;
 		}
+		case ASMC_OP_REPT: {
+			dst.off += dputf(dst, "\t.rept %d", op->d);
+			break;
+		}
+		case ASMC_OP_ENDR: {
+			dst.off += dputf(dst, "\t.endr");
+			break;
+		}
 		case ASMC_OP_NOP: {
-			for (u64 i = 0; i < op->d; i++) {
-				dst.off += dputf(dst, "\tnop");
+			if (op->d > 3) {
+				dst.off += dputf(dst, "\t.rept %d\n", op->d);
+				dst.off += dputf(dst, "\t\tnop\n");
+				dst.off += dputf(dst, "\t.endr");
+			} else {
+				for (u64 i = 0; i < op->d; i++) {
+					if (i > 0) {
+						dst.off += dputf(dst, "\n");
+					}
+					dst.off += dputf(dst, "\tnop");
+				}
 			}
 			break;
 		}
