@@ -14,6 +14,8 @@ typedef enum elfc_sect_type_e {
 	ELF_SECT_TYPE_ELF_HEADER,
 	ELF_SECT_TYPE_PROGRAM_HEADER,
 	ELF_SECT_TYPE_SECTION_HEADER,
+	ELF_SECT_TYPE_INTERP,
+	ELF_SECT_TYPE_NOTE,
 	ELF_SECT_TYPE_STRTAB,
 	ELF_SECT_TYPE_DYNAMIC,
 	ELF_SECT_TYPE_DYNSYM,
@@ -60,6 +62,14 @@ typedef struct elfc_sect_s {
 			tbl_t tbl;
 			uint layout;
 		} section_header;
+		struct {
+			size_t path;
+		} interp;
+		struct {
+			tbl_t tbl;
+			uint layout;
+			arr_t notes;
+		} note;
 		struct {
 			arr_t strs;
 		} strtab;

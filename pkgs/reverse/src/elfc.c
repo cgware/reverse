@@ -592,6 +592,245 @@ static int parse_section_header(elfc_t *elfc, u64 off, u8 class, u16 num, u16 si
 	return 0;
 }
 
+enum {
+	NOTE_SECTION_TYPE_GNU_ABI_TAG	      = 1,
+	NOTE_SECTION_TYPE_GNU_BUILD_ID	      = 3,
+	NOTE_SECTION_TYPE_GNU_PROPERTY_TYPE_0 = 5,
+};
+
+enum {
+	NOTE_SECTION_NAMESZ,
+	NOTE_SECTION_DESCSZ,
+	NOTE_SECTION_TYPE,
+	NOTE_SECTION_NAME,
+};
+
+#define NOTE_SECTION_GNU_PROPERTY_X86_FEATURE_1_AND   0xc0000002
+#define NOTE_SECTION_GNU_PROPERTY_X86_FEATURE_1_IBT   0
+#define NOTE_SECTION_GNU_PROPERTY_X86_FEATURE_1_SHSTK 1
+
+#define NOTE_SECTION_GNU_PROPERTY_X86_ISA_1_NEEDED   0xc0008002
+#define NOTE_SECTION_GNU_PROPERTY_X86_ISA_1_BASELINE 1
+
+typedef enum note_section_gnu_property_type_e {
+	NOTE_SECTION_GNU_PROPERTY_UNKNOWN,
+	NOTE_SECTION_GNU_PROPERTY_FEATURES,
+	NOTE_SECTION_GNU_PROPERTY_ISA,
+} note_section_gnu_prperty_type_t;
+
+typedef enum note_section_gnu_property_isa_e {
+	NOTE_SECTION_GNU_PROPERTY_ISA_UNKNOWN,
+	NOTE_SECTION_GNU_PROPERTY_ISA_BASELINE,
+} note_section_gnu_property_isa_t;
+
+typedef struct note_section_gnu_property_s {
+	note_section_gnu_prperty_type_t type;
+	union {
+		struct {
+			byte ibt;
+			byte shstk;
+		} features;
+		struct {
+			note_section_gnu_property_isa_t isa;
+		} isa;
+	} data;
+} note_section_gnu_property_t;
+
+#define NOTE_SECTION_ABI_TAG_ELF_NOTE_OS_LINUX 0
+
+typedef enum note_section_abi_tag_os_e {
+	NOTE_SECTION_ABI_TAG_OS_UNKNOWN,
+	NOTE_SECTION_ABI_TAG_OS_LINUX,
+} note_section_abi_tag_os_t;
+
+typedef enum note_section_note_type_e {
+	NOTE_TYPE_UNKNOWN,
+	NOTE_TYPE_GNU_ABI_TAG,
+	NOTE_TYPE_GNU_BUILD_ID,
+	NOTE_TYPE_GNU_PROPERTIES,
+} note_section_type_t;
+
+typedef struct note_section_note_s {
+	note_section_type_t type;
+	union {
+		struct {
+			note_section_abi_tag_os_t os;
+			u32 major;
+			u32 minor;
+			u32 patch;
+		} abi_tag;
+		struct {
+			byte bytes[20];
+		} build_id;
+		struct {
+			arr_t arr;
+		} gnu_properties;
+	} data;
+} note_section_note_t;
+
+static int parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, alloc_t alloc)
+{
+	static const schema_val_t types[] = {
+		{NOTE_SECTION_TYPE_GNU_ABI_TAG, STRVT("ABI_TAG")},
+		{NOTE_SECTION_TYPE_GNU_BUILD_ID, STRVT("GNU_BUILD_ID")},
+		{NOTE_SECTION_TYPE_GNU_PROPERTY_TYPE_0, STRVT("GNU_PROPERTY_TYPE_0")},
+	};
+
+	schema_field_desc_t fields[] = {
+		[NOTE_SECTION_NAMESZ] = {STRVT("Name size"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		[NOTE_SECTION_DESCSZ] = {STRVT("Desc size"), 4, SCHEMA_TYPE_INT, NULL, 0},
+		[NOTE_SECTION_TYPE]   = {STRVT("Type"), 4, SCHEMA_TYPE_ENUM, types, sizeof(types)},
+		[NOTE_SECTION_NAME]   = {STRVT("Name"), 0, SCHEMA_TYPE_STR, NULL, 0},
+	};
+
+	tbl_init(&sect->data.note.tbl, sizeof(fields) / sizeof(schema_field_desc_t), 2, 16, alloc);
+	schema_add_fields(&sect->data.note.tbl.schema, fields, sizeof(fields));
+
+	schema_member_desc_t members[] = {
+		{NOTE_SECTION_NAMESZ, 4},
+		{NOTE_SECTION_DESCSZ, 4},
+		{NOTE_SECTION_TYPE, 4},
+		{NOTE_SECTION_NAME, 0},
+	};
+
+	schema_add_layout(&sect->data.note.tbl.schema, members, sizeof(members), NULL);
+
+	schema_member_desc_t membersr[] = {
+		{NOTE_SECTION_NAMESZ, 4},
+		{NOTE_SECTION_DESCSZ, 4},
+		{NOTE_SECTION_TYPE, 4},
+	};
+
+	schema_add_layout(&sect->data.note.tbl.schema, membersr, sizeof(membersr), NULL);
+	tbl_init_rows(&sect->data.section_header.tbl, 2, alloc);
+
+	arr_init(&sect->data.note.notes, 2, sizeof(note_section_note_t), alloc);
+	sect->data.note.layout = 1;
+
+	u64 base = off;
+	while (off < base + size) {
+		void *data		 = tbl_add_row(&sect->data.section_header.tbl, NULL);
+		const schema_layout_t *l = schema_get_layout(&sect->data.note.tbl.schema, sect->data.note.layout);
+		for (uint i = l->members; i < l->members + l->members_cnt; i++) {
+			const schema_member_t *member =
+				schema_get_member(&sect->data.note.tbl.schema, sect->data.note.layout, i - l->members);
+			void *val = bin_get(&elfc->bin, member->size, &off);
+			if (val == NULL) {
+				return 1;
+			}
+			schema_set_val(&sect->data.note.tbl.schema, sect->data.note.layout, i - l->members, data, val);
+		}
+		u32 namesz     = *(u32 *)schema_get_val(&sect->data.note.tbl.schema, NOTE_SECTION_NAMESZ, data);
+		size_t len     = 0;
+		char *name_buf = bin_get(&elfc->bin, namesz, &off);
+		while (len < namesz && name_buf[len] != '\0') {
+			len++;
+		}
+		size_t name_off;
+		strvbuf_add(&elfc->strs, STRVN(name_buf, len), &name_off);
+		schema_set_val(&sect->data.note.tbl.schema, 0, NOTE_SECTION_NAME, data, &name_off);
+
+		u32 descsz = *(u32 *)schema_get_val(&sect->data.note.tbl.schema, NOTE_SECTION_DESCSZ, data);
+
+		u32 type = *(u32 *)schema_get_val(&sect->data.note.tbl.schema, NOTE_SECTION_TYPE, data);
+		switch (type) {
+		case NOTE_TYPE_GNU_ABI_TAG: {
+			note_section_note_t *note = arr_add(&sect->data.note.notes, NULL);
+			note->type		  = NOTE_TYPE_GNU_ABI_TAG;
+			u32 os;
+			bin_get_int(&elfc->bin, &os, 4, &off);
+			switch (os) {
+			case NOTE_SECTION_ABI_TAG_ELF_NOTE_OS_LINUX: {
+				note->data.abi_tag.os = NOTE_SECTION_ABI_TAG_OS_LINUX;
+				break;
+			}
+			default: {
+				log_error("reverse", "elfc", NULL, "Unknown OS: %d", os);
+				note->data.abi_tag.os = NOTE_SECTION_ABI_TAG_OS_UNKNOWN;
+				break;
+			}
+			}
+			bin_get_int(&elfc->bin, &note->data.abi_tag.major, 4, &off);
+			bin_get_int(&elfc->bin, &note->data.abi_tag.minor, 4, &off);
+			bin_get_int(&elfc->bin, &note->data.abi_tag.patch, 4, &off);
+			break;
+		}
+		case NOTE_SECTION_TYPE_GNU_BUILD_ID: {
+			note_section_note_t *note = arr_add(&sect->data.note.notes, NULL);
+			note->type		  = NOTE_TYPE_GNU_BUILD_ID;
+			if (sizeof(note->data.build_id.bytes) == descsz) {
+				bin_get_int(&elfc->bin, note->data.build_id.bytes, descsz, &off);
+			} else {
+				log_error("reverse",
+					  "elfc",
+					  NULL,
+					  "Expected %d bytes for build id: %d",
+					  sizeof(note->data.build_id.bytes),
+					  descsz);
+				off += descsz;
+			}
+			break;
+		}
+		case NOTE_SECTION_TYPE_GNU_PROPERTY_TYPE_0: {
+			note_section_note_t *note = arr_add(&sect->data.note.notes, NULL);
+			note->type		  = NOTE_TYPE_GNU_PROPERTIES;
+			arr_init(&note->data.gnu_properties.arr, 2, sizeof(note_section_gnu_property_t), alloc);
+			u64 desc_base = off;
+			while (off < desc_base + descsz) {
+				u32 gnu_type;
+				bin_get_int(&elfc->bin, &gnu_type, 4, &off);
+				u32 datasz;
+				bin_get_int(&elfc->bin, &datasz, 4, &off);
+
+				switch (gnu_type) {
+				case NOTE_SECTION_GNU_PROPERTY_X86_FEATURE_1_AND: {
+					note_section_gnu_property_t *gnu_property = arr_add(&note->data.gnu_properties.arr, NULL);
+					gnu_property->type			  = NOTE_SECTION_GNU_PROPERTY_FEATURES;
+					u32 features;
+					bin_get_int(&elfc->bin, &features, datasz, &off);
+					gnu_property->data.features.ibt = !!(features & (1 << NOTE_SECTION_GNU_PROPERTY_X86_FEATURE_1_IBT));
+					gnu_property->data.features.shstk =
+						!!(features & (1 << NOTE_SECTION_GNU_PROPERTY_X86_FEATURE_1_SHSTK));
+					bin_get(&elfc->bin, 4, &off);
+					break;
+				}
+				case NOTE_SECTION_GNU_PROPERTY_X86_ISA_1_NEEDED: {
+					note_section_gnu_property_t *gnu_property = arr_add(&note->data.gnu_properties.arr, NULL);
+					gnu_property->type			  = NOTE_SECTION_GNU_PROPERTY_ISA;
+					u32 isa;
+					bin_get_int(&elfc->bin, &isa, datasz, &off);
+					switch (isa) {
+					case NOTE_SECTION_GNU_PROPERTY_X86_ISA_1_BASELINE: {
+						gnu_property->data.isa.isa = NOTE_SECTION_GNU_PROPERTY_ISA_BASELINE;
+						break;
+					}
+					default: {
+						log_error("reverse", "elfc", NULL, "Unknown ISA: %d", isa);
+						break;
+					}
+					}
+					bin_get(&elfc->bin, 4, &off);
+					break;
+				}
+				default: {
+					log_error("reverse", "elfc", NULL, "Unknown GNU type: %d", gnu_type);
+					break;
+				}
+				}
+			}
+			break;
+		}
+		default: {
+			log_error("reverse", "elfc", NULL, "Unknown note type: %d", type);
+			off += descsz;
+			break;
+		}
+		}
+	}
+
+	return 0;
+}
+
 static int parse_strtab_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, alloc_t alloc)
 {
 	char *data = elfc->bin.buf.data;
@@ -2276,6 +2515,128 @@ int elfc_read(elfc_t *elfc, fs_t *fs, strv_t path, alloc_t alloc)
 		sect	 = arr_get(&elfc->sects, elfc->section_header);
 		u32 type = *(u32 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_TYPE);
 		switch (type) {
+		case SECTION_HEADER_TYPE_PROGBITS: {
+			u64 offset	= *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_OFFSET);
+			size_t name_off = *(size_t *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_NAME);
+			strv_t name	= strvbuf_get(&sect->data.section_header.tbl.strs, name_off);
+			if (strv_eq(name, STRV(".interp"))) {
+				sect	     = find_sect(elfc, offset);
+				sect->type   = ELF_SECT_TYPE_INTERP;
+				strv_t label = strvbuf_get(&elfc->strs, sect->label);
+				log_info("reverse", "elfc", NULL, "Parsing %.*s", label.len, label.data);
+				const char *path = &((char *)elfc->bin.buf.data)[offset];
+				size_t len	 = 0;
+				while (path[len] != '\0') {
+					len++;
+				}
+				strv_t str = STRVN(path, len);
+				dputf(DST_STD(), "[%.*s]\n", label.len, label.data);
+				dputf(DST_STD(), "%.*s\n", str.len, str.data);
+				strvbuf_add(&elfc->strs, str, &sect->data.interp.path);
+				dputf(DST_STD(), "\n");
+			}
+			break;
+		}
+		case SECTION_HEADER_TYPE_NOTE: {
+			u64 offset   = *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_OFFSET);
+			sect	     = find_sect(elfc, offset);
+			sect->type   = ELF_SECT_TYPE_NOTE;
+			strv_t label = strvbuf_get(&elfc->strs, sect->label);
+			log_info("reverse", "elfc", NULL, "Parsing %.*s", label.len, label.data);
+			parse_note_section(elfc, offset, sect->size, sect, alloc);
+			dputf(DST_STD(), "\n");
+			dputf(DST_STD(), "[%.*s]\n", label.len, label.data);
+
+			for (uint i = 0; i < sect->data.note.notes.cnt; i++) {
+				const schema_layout_t *l = schema_get_layout(&sect->data.note.tbl.schema, 0);
+				for (uint j = l->members; j < l->members + l->members_cnt; j++) {
+					const schema_member_t *m = arr_get(&sect->data.note.tbl.schema.members, j);
+					const schema_field_t *f	 = schema_get_field(&sect->data.note.tbl.schema, m->field);
+					strv_t name		 = schema_get_str(&sect->data.note.tbl.schema, f->name);
+					dputf(DST_STD(), "%.*s: ", name.len, name.data);
+
+					const schema_field_t *field = schema_get_field(&sect->data.note.tbl.schema, m->field);
+					const void *val		    = tbl_get_cell(&sect->data.note.tbl, i, j);
+					switch (field->type) {
+					case SCHEMA_TYPE_STR: {
+						strv_print(strvbuf_get(&elfc->strs, *(size_t *)val), DST_STD());
+						break;
+					}
+					default: schema_print_val(&sect->data.note.tbl.schema, 0, m->field, val, DST_STD()); break;
+					}
+
+					dputf(DST_STD(), "\n");
+				}
+				note_section_note_t *note = arr_get(&sect->data.note.notes, i);
+				switch (note->type) {
+				case NOTE_TYPE_GNU_ABI_TAG: {
+					dputf(DST_STD(),
+					      "ABI tag:\n"
+					      "    OS: ");
+					switch (note->data.abi_tag.os) {
+					case NOTE_SECTION_ABI_TAG_OS_LINUX: {
+						dputf(DST_STD(), "Linux");
+						break;
+					}
+					default: {
+						dputf(DST_STD(), "Unknown");
+						break;
+					}
+					}
+					dputf(DST_STD(),
+					      "\n    Version: %d.%d.%d\n",
+					      note->data.abi_tag.major,
+					      note->data.abi_tag.minor,
+					      note->data.abi_tag.patch);
+					break;
+				}
+				case NOTE_TYPE_GNU_BUILD_ID: {
+					dputf(DST_STD(), "Build ID: ");
+					for (uint j = 0; j < sizeof(note->data.build_id.bytes); j++) {
+						dputf(DST_STD(), "%x", note->data.build_id.bytes[j]);
+					}
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				case NOTE_TYPE_GNU_PROPERTIES: {
+					note_section_gnu_property_t *gnu_property;
+					uint j = 0;
+					arr_foreach(&note->data.gnu_properties.arr, j, gnu_property)
+					{
+						switch (gnu_property->type) {
+						case NOTE_SECTION_GNU_PROPERTY_FEATURES: {
+							dputf(DST_STD(), "Features:\n");
+							if (gnu_property->data.features.ibt) {
+								dputf(DST_STD(), "    IBT\n");
+							}
+							if (gnu_property->data.features.shstk) {
+								dputf(DST_STD(), "    SHSTK\n");
+							}
+							break;
+						}
+						case NOTE_SECTION_GNU_PROPERTY_ISA: {
+							dputf(DST_STD(), "ISA: ");
+							switch (gnu_property->data.isa.isa) {
+							case NOTE_SECTION_GNU_PROPERTY_ISA_BASELINE: {
+								dputf(DST_STD(), "BASELINE");
+								break;
+							}
+							default: break;
+							}
+							break;
+						}
+						default: break;
+						}
+					}
+					dputf(DST_STD(), "\n");
+					break;
+				}
+				default: break;
+				}
+			}
+			dputf(DST_STD(), "\n");
+			break;
+		}
 		case SECTION_HEADER_TYPE_STRTAB: {
 			u64 offset   = *(u64 *)tbl_get_cell(&sect->data.section_header.tbl, i, SECTION_HEADER_OFFSET);
 			sect	     = find_sect(elfc, offset);
@@ -2495,6 +2856,13 @@ static strv_t s_reladyn_section_labels[] = {
 	[RELADYN_SECTION_NAME]	 = STRVT("reladyn_section_name"),
 };
 
+static strv_t s_note_section_labels[] = {
+	[NOTE_SECTION_NAMESZ] = STRVT("note_section_namesz"),
+	[NOTE_SECTION_DESCSZ] = STRVT("note_section_typesz"),
+	[NOTE_SECTION_TYPE]   = STRVT("note_section_type"),
+	[NOTE_SECTION_NAME]   = STRVT("note_section_"),
+};
+
 static int elfc_asmc_unknown_zeros(asmc_t *asmc, uint *unknown_zeros)
 {
 	if (*unknown_zeros > 0) {
@@ -2535,6 +2903,7 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 	uint unknown_cnt   = 0;
 	int label	   = 0;
 	uint unknown_zeros = 0;
+	int note_cnt	   = 0;
 
 	u64 addr = 0;
 	while (addr < elfc->bin.buf.used) {
@@ -2642,6 +3011,194 @@ int elfc_asmc(const elfc_t *elfc, asmc_t *asmc)
 							 sect->data.section_header.layout,
 							 1,
 							 i);
+				}
+				break;
+			}
+			case ELF_SECT_TYPE_INTERP: {
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_STRING;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->data.interp.path), &op->str);
+				break;
+			}
+			case ELF_SECT_TYPE_NOTE: {
+				op	 = arr_add(&asmc->ops, NULL);
+				op->type = ASMC_OP_LABEL;
+				strvbuf_add(&asmc->strs, strvbuf_get(&elfc->strs, sect->label), &op->str);
+
+				for (uint i = 0; i < sect->data.note.notes.cnt; i++) {
+					void *note_data = arr_get(&sect->data.note.tbl.rows, i);
+					elfc_asmc_schema(asmc,
+							 &sect->data.note.tbl.schema,
+							 s_note_section_labels,
+							 note_data,
+							 sect->data.note.layout,
+							 1,
+							 note_cnt);
+
+					note_section_note_t *note = arr_get(&sect->data.note.notes, i);
+					switch (note->type) {
+					case NOTE_TYPE_GNU_ABI_TAG: {
+						op	 = arr_add(&asmc->ops, NULL);
+						op->type = ASMC_OP_LABEL;
+						strvbuf_add(&asmc->strs, STRV("note_section_abi_tag_os"), &op->str);
+
+						switch (note->data.abi_tag.os) {
+						case NOTE_SECTION_ABI_TAG_OS_LINUX: {
+							op	 = arr_add(&asmc->ops, NULL);
+							op->type = ASMC_OP_LONG;
+							op->d	 = NOTE_SECTION_ABI_TAG_ELF_NOTE_OS_LINUX;
+						}
+						default: break;
+						}
+
+						op	 = arr_add(&asmc->ops, NULL);
+						op->type = ASMC_OP_LABEL;
+						strvbuf_add(&asmc->strs, STRV("note_section_abi_tag_major"), &op->str);
+
+						op	 = arr_add(&asmc->ops, NULL);
+						op->type = ASMC_OP_LONG;
+						op->d	 = note->data.abi_tag.major;
+
+						op	 = arr_add(&asmc->ops, NULL);
+						op->type = ASMC_OP_LABEL;
+						strvbuf_add(&asmc->strs, STRV("note_section_abi_tag_minor"), &op->str);
+
+						op	 = arr_add(&asmc->ops, NULL);
+						op->type = ASMC_OP_LONG;
+						op->d	 = note->data.abi_tag.minor;
+
+						op	 = arr_add(&asmc->ops, NULL);
+						op->type = ASMC_OP_LABEL;
+						strvbuf_add(&asmc->strs, STRV("note_section_abi_tag_patch"), &op->str);
+
+						op	 = arr_add(&asmc->ops, NULL);
+						op->type = ASMC_OP_LONG;
+						op->d	 = note->data.abi_tag.patch;
+						break;
+					}
+					case NOTE_TYPE_GNU_BUILD_ID: {
+						op	 = arr_add(&asmc->ops, NULL);
+						op->type = ASMC_OP_LABEL;
+						strvbuf_add(&asmc->strs, STRV("note_section_build_id"), &op->str);
+
+						for (uint j = 0; j < sizeof(note->data.build_id.bytes); j++) {
+							op	 = arr_add(&asmc->ops, NULL);
+							op->type = ASMC_OP_BYTE;
+							op->d	 = note->data.build_id.bytes[j];
+						}
+						break;
+					}
+					case NOTE_TYPE_GNU_PROPERTIES: {
+						op	 = arr_add(&asmc->ops, NULL);
+						op->type = ASMC_OP_LABEL;
+						strvbuf_add(&asmc->strs, STRV("note_section_gnu_preperties"), &op->str);
+
+						note_section_gnu_property_t *gnu_property;
+						uint j = 0;
+
+						arr_foreach(&note->data.gnu_properties.arr, j, gnu_property)
+						{
+							switch (gnu_property->type) {
+							case NOTE_SECTION_GNU_PROPERTY_FEATURES: {
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LABEL;
+								strvbuf_add(
+									&asmc->strs, STRV("note_section_gnu_property_features"), &op->str);
+
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LONG;
+								op->d	 = NOTE_SECTION_GNU_PROPERTY_X86_FEATURE_1_AND;
+
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LABEL;
+								strvbuf_add(&asmc->strs,
+									    STRV("note_section_gnu_preperty_features_datasz"),
+									    &op->str);
+
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LONG;
+								op->d	 = 4;
+
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LABEL;
+								strvbuf_add(&asmc->strs,
+									    STRV("note_section_gnu_preperty_features_features"),
+									    &op->str);
+
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LONG;
+								op->d	 = (gnu_property->data.features.ibt
+									    << NOTE_SECTION_GNU_PROPERTY_X86_FEATURE_1_IBT) |
+									(gnu_property->data.features.shstk
+									 << NOTE_SECTION_GNU_PROPERTY_X86_FEATURE_1_SHSTK);
+
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LABEL;
+								strvbuf_add(&asmc->strs,
+									    STRV("note_section_gnu_preperty_features_padding"),
+									    &op->str);
+
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LONG;
+								op->d	 = 0;
+								break;
+							}
+							case NOTE_SECTION_GNU_PROPERTY_ISA: {
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LABEL;
+								strvbuf_add(&asmc->strs, STRV("note_section_gnu_property_isa"), &op->str);
+
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LONG;
+								op->d	 = NOTE_SECTION_GNU_PROPERTY_X86_ISA_1_NEEDED;
+
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LABEL;
+								strvbuf_add(&asmc->strs,
+									    STRV("note_section_gnu_property_isa_datasz"),
+									    &op->str);
+
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LONG;
+								op->d	 = 4;
+
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LABEL;
+								strvbuf_add(
+									&asmc->strs, STRV("note_section_gnu_property_isa_isa"), &op->str);
+
+								switch (gnu_property->data.isa.isa) {
+								case NOTE_SECTION_GNU_PROPERTY_ISA_BASELINE: {
+									op	 = arr_add(&asmc->ops, NULL);
+									op->type = ASMC_OP_LONG;
+									op->d	 = NOTE_SECTION_GNU_PROPERTY_X86_ISA_1_BASELINE;
+									break;
+								}
+								default: break;
+								}
+
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LABEL;
+								strvbuf_add(&asmc->strs,
+									    STRV("note_section_gnu_property_isa_padding"),
+									    &op->str);
+
+								op	 = arr_add(&asmc->ops, NULL);
+								op->type = ASMC_OP_LONG;
+								op->d	 = 0;
+								break;
+							}
+							default: break;
+							}
+						}
+						break;
+					}
+					default: break;
+					}
+					note_cnt++;
 				}
 				break;
 			}
