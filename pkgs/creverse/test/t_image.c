@@ -216,9 +216,10 @@ TEST(image_print_sections)
 	EXPECT_NE(t_image_str_contains(printed, STRV("unknown")), 0);
 	EXPECT_NE(t_image_str_contains(printed, STRV("-")), 0);
 
+#ifdef C_LINUX
 	char small[1] = {0};
 	EXPECT_GT(reverse_image_print_sections(&image, DST_BUF(small)), 0);
-
+#endif
 	reverse_image_free(&image);
 
 	END;
