@@ -1,0 +1,59 @@
+#include "log.h"
+#include "mem.h"
+#include "test.h"
+
+STEST(arch);
+STEST(asmc);
+STEST(format);
+STEST(format_elf);
+STEST(format_rtl8373n);
+STEST(gen_asm);
+STEST(gen_asm_8051);
+STEST(gen_asm_x86);
+STEST(image);
+STEST(ir);
+STEST(parse_8051);
+STEST(parse_x86);
+
+TEST(creverse)
+{
+	SSTART;
+
+	RUN(arch);
+	RUN(asmc);
+	RUN(format);
+	RUN(format_elf);
+	RUN(format_rtl8373n);
+	RUN(gen_asm);
+	RUN(gen_asm_8051);
+	RUN(gen_asm_x86);
+	RUN(image);
+	RUN(ir);
+	RUN(parse_8051);
+	RUN(parse_x86);
+
+	SEND;
+}
+
+int main()
+{
+	c_print_init();
+
+	log_t log = {0};
+	log_set(&log);
+	log_add_callback(log_std_cb, DST_STD(), LOG_WARN, 1, 1);
+
+	t_init();
+
+	t_run(test_creverse, 1);
+
+	int ret = t_finish();
+
+	mem_print(DST_STD());
+
+	if (mem_check()) {
+		ret = 1;
+	}
+
+	return ret;
+}

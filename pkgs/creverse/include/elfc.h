@@ -2,8 +2,8 @@
 #define ELFC_H
 
 #include "asmc.h"
-#include "bin.h"
-#include "fs.h"
+#include "buf.h"
+#include "image.h"
 #include "tbl.h"
 
 typedef enum elfc_sect_type_e {
@@ -92,16 +92,28 @@ typedef struct elfc_sect_s {
 } elfc_sect_t;
 
 typedef struct elfc_s {
-	bin_t bin;
+	buf_t bytes;
 	strvbuf_t strs;
 	arr_t sects;
 	uint section_header;
 } elfc_t;
 
+enum {
+	ELFC_IDENT_CLASS_UNKNOWN,
+	ELFC_IDENT_CLASS_32,
+	ELFC_IDENT_CLASS_64,
+	__ELFC_IDENT_CLASS_CNT,
+};
+
+enum {
+	ELFC_IDENT_DATA_UNKNOWN,
+	ELFC_IDENT_DATA_LE,
+	ELFC_IDENT_DATA_BE,
+};
+
 elfc_t *elfc_init(elfc_t *elfc, alloc_t alloc);
 void elfc_free(elfc_t *elfc);
-
-int elfc_read(elfc_t *elfc, fs_t *fs, strv_t path, alloc_t alloc);
+elfc_sect_t *elfc_find_sect(const elfc_t *elfc, u64 addr);
 
 int elfc_asmc(const elfc_t *elfc, asmc_t *asmc);
 
