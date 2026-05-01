@@ -541,6 +541,9 @@ int elfc_parse_section_header(elfc_t *elfc, u64 off, u8 class, u16 num, u16 size
 
 int elfc_parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, alloc_t alloc)
 {
+	size_t cur = (size_t)off;
+	size_t end   = cur + (size_t)size;
+
 	static const schema_val_t types[] = {
 		{NOTE_SECTION_TYPE_GNU_ABI_TAG, STRVT("ABI_TAG")},
 		{NOTE_SECTION_TYPE_GNU_BUILD_ID, STRVT("GNU_BUILD_ID")},
@@ -578,14 +581,13 @@ int elfc_parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, 
 	arr_init(&sect->data.note.notes, 2, sizeof(note_section_note_t), alloc);
 	sect->data.note.layout = 1;
 
-	u64 base = off;
-	while (off < base + size) {
+	while (cur < end) {
 		void *data		 = tbl_add_row(&sect->data.note.tbl, NULL);
 		const schema_layout_t *l = schema_get_layout(&sect->data.note.tbl.schema, sect->data.note.layout);
 		for (uint i = l->members; i < l->members + l->members_cnt; i++) {
 			const schema_member_t *member =
 				schema_get_member(&sect->data.note.tbl.schema, sect->data.note.layout, i - l->members);
-			void *val = bin_get(ELFC_BIN(elfc), member->size, &off);
+			void *val = bin_get(ELFC_BIN(elfc), member->size, &cur);
 			if (val == NULL) {
 				return 1;
 			}
@@ -593,7 +595,7 @@ int elfc_parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, 
 		}
 		u32 namesz     = *(u32 *)schema_get_val(&sect->data.note.tbl.schema, NOTE_SECTION_NAMESZ, data);
 		size_t len     = 0;
-		char *name_buf = bin_get(ELFC_BIN(elfc), namesz, &off);
+		char *name_buf = bin_get(ELFC_BIN(elfc), namesz, &cur);
 		while (len < namesz && name_buf[len] != '\0') {
 			len++;
 		}
@@ -610,7 +612,7 @@ int elfc_parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, 
 			mem_set(note, 0, sizeof(*note));
 			note->type		  = NOTE_TYPE_GNU_ABI_TAG;
 			u32 os;
-			bin_get_int(ELFC_BIN(elfc), &os, 4, &off);
+			bin_get_int(ELFC_BIN(elfc), &os, 4, &cur);
 			switch (os) {
 			case NOTE_SECTION_ABI_TAG_ELF_NOTE_OS_LINUX: {
 				note->data.abi_tag.os = NOTE_SECTION_ABI_TAG_OS_LINUX;
@@ -622,9 +624,9 @@ int elfc_parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, 
 				break;
 			}
 			}
-			bin_get_int(ELFC_BIN(elfc), &note->data.abi_tag.major, 4, &off);
-			bin_get_int(ELFC_BIN(elfc), &note->data.abi_tag.minor, 4, &off);
-			bin_get_int(ELFC_BIN(elfc), &note->data.abi_tag.patch, 4, &off);
+			bin_get_int(ELFC_BIN(elfc), &note->data.abi_tag.major, 4, &cur);
+			bin_get_int(ELFC_BIN(elfc), &note->data.abi_tag.minor, 4, &cur);
+			bin_get_int(ELFC_BIN(elfc), &note->data.abi_tag.patch, 4, &cur);
 			break;
 		}
 		case NOTE_SECTION_TYPE_GNU_BUILD_ID: {
@@ -632,7 +634,7 @@ int elfc_parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, 
 			mem_set(note, 0, sizeof(*note));
 			note->type		  = NOTE_TYPE_GNU_BUILD_ID;
 			if (sizeof(note->data.build_id.bytes) == descsz) {
-				bin_get_int(ELFC_BIN(elfc), note->data.build_id.bytes, descsz, &off);
+				bin_get_int(ELFC_BIN(elfc), note->data.build_id.bytes, descsz, &cur);
 			} else {
 				log_error("reverse",
 					  "elfc",
@@ -640,7 +642,7 @@ int elfc_parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, 
 					  "Expected %d bytes for build id: %d",
 					  sizeof(note->data.build_id.bytes),
 					  descsz);
-				off += descsz;
+				cur += descsz;
 			}
 			break;
 		}
@@ -649,12 +651,12 @@ int elfc_parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, 
 			mem_set(note, 0, sizeof(*note));
 			note->type		  = NOTE_TYPE_GNU_PROPERTIES;
 			arr_init(&note->data.gnu_properties.arr, 2, sizeof(note_section_gnu_property_t), alloc);
-			u64 desc_base = off;
-			while (off < desc_base + descsz) {
+			size_t desc_base = cur;
+			while (cur < desc_base + descsz) {
 				u32 gnu_type;
-				bin_get_int(ELFC_BIN(elfc), &gnu_type, 4, &off);
+				bin_get_int(ELFC_BIN(elfc), &gnu_type, 4, &cur);
 				u32 datasz;
-				bin_get_int(ELFC_BIN(elfc), &datasz, 4, &off);
+				bin_get_int(ELFC_BIN(elfc), &datasz, 4, &cur);
 
 				switch (gnu_type) {
 				case NOTE_SECTION_GNU_PROPERTY_X86_FEATURE_1_AND: {
@@ -662,11 +664,11 @@ int elfc_parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, 
 					mem_set(gnu_property, 0, sizeof(*gnu_property));
 					gnu_property->type			  = NOTE_SECTION_GNU_PROPERTY_FEATURES;
 					u32 features;
-					bin_get_int(ELFC_BIN(elfc), &features, datasz, &off);
+					bin_get_int(ELFC_BIN(elfc), &features, datasz, &cur);
 					gnu_property->data.features.ibt = !!(features & (1 << NOTE_SECTION_GNU_PROPERTY_X86_FEATURE_1_IBT));
 					gnu_property->data.features.shstk =
 						!!(features & (1 << NOTE_SECTION_GNU_PROPERTY_X86_FEATURE_1_SHSTK));
-					bin_get(ELFC_BIN(elfc), 4, &off);
+					bin_get(ELFC_BIN(elfc), 4, &cur);
 					break;
 				}
 				case NOTE_SECTION_GNU_PROPERTY_X86_ISA_1_NEEDED: {
@@ -675,7 +677,7 @@ int elfc_parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, 
 					gnu_property->type			  = NOTE_SECTION_GNU_PROPERTY_ISA;
 					gnu_property->data.isa.isa		  = NOTE_SECTION_GNU_PROPERTY_ISA_UNKNOWN;
 					u32 isa;
-					bin_get_int(ELFC_BIN(elfc), &isa, datasz, &off);
+					bin_get_int(ELFC_BIN(elfc), &isa, datasz, &cur);
 					switch (isa) {
 					case NOTE_SECTION_GNU_PROPERTY_X86_ISA_1_BASELINE: {
 						gnu_property->data.isa.isa = NOTE_SECTION_GNU_PROPERTY_ISA_BASELINE;
@@ -686,7 +688,7 @@ int elfc_parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, 
 						break;
 					}
 					}
-					bin_get(ELFC_BIN(elfc), 4, &off);
+					bin_get(ELFC_BIN(elfc), 4, &cur);
 					break;
 				}
 				default: {
@@ -694,7 +696,7 @@ int elfc_parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, 
 					note_section_gnu_property_t *gnu_property = arr_add(&note->data.gnu_properties.arr, NULL);
 					mem_set(gnu_property, 0, sizeof(*gnu_property));
 					gnu_property->type = NOTE_SECTION_GNU_PROPERTY_UNKNOWN;
-					off += datasz;
+					cur += datasz;
 					break;
 				}
 				}
@@ -706,7 +708,7 @@ int elfc_parse_note_section(elfc_t *elfc, u64 off, u64 size, elfc_sect_t *sect, 
 			note_section_note_t *note = arr_add(&sect->data.note.notes, NULL);
 			mem_set(note, 0, sizeof(*note));
 			note->type = NOTE_TYPE_UNKNOWN;
-			off += descsz;
+			cur += descsz;
 			break;
 		}
 		}
@@ -1006,6 +1008,9 @@ static int map_dynsym_bind(tbl_t *tbl, uint row, uint col, const void *data, voi
 
 int elfc_parse_dynsym_section(elfc_t *elfc, u64 off, u64 size, u8 class, u64 dynstr_off, elfc_sect_t *sect, alloc_t alloc)
 {
+	size_t cur = (size_t)off;
+	size_t end   = cur + (size_t)size;
+
 	static const schema_val_t types[] = {
 		{DYNSYM_SECTION_TYPE_NOTYPE, STRVT("NOTYPE")},
 		{DYNSYM_SECTION_TYPE_OBJECT, STRVT("OBJECT")},
@@ -1076,10 +1081,9 @@ int elfc_parse_dynsym_section(elfc_t *elfc, u64 off, u64 size, u8 class, u64 dyn
 	default: return 1;
 	}
 
-	size_t end = off + size;
-	while (off < end) {
+	while (cur < end) {
 		void *data = tbl_add_row(&sect->data.dynsym.tbl, NULL);
-		read_layout(ELFC_BIN(elfc), &off, &sect->data.dynsym.tbl.schema, sect->data.dynsym.layout, data);
+		read_layout(ELFC_BIN(elfc), &cur, &sect->data.dynsym.tbl.schema, sect->data.dynsym.layout, data);
 	}
 
 	tbl_map(&sect->data.dynsym.tbl, DYNSYM_SECTION_INFO, DYNSYM_SECTION_TYPE, map_dynsym_type, NULL);
@@ -1122,6 +1126,9 @@ int elfc_map_reladyn_name(tbl_t *tbl, uint row, uint col, const void *data, void
 
 int elfc_parse_reladyn_section(elfc_t *elfc, u64 off, u64 size, u8 class, uint dynsym_id, elfc_sect_t *sect, alloc_t alloc)
 {
+	size_t cur = (size_t)off;
+	size_t end   = cur + (size_t)size;
+
 	static const schema_val_t types[] = {
 		{RELADYN_SECTIONT_TYPE_GLOB_DAT, STRVT("GLOB_DAT")},
 		{RELADYN_SECTIONT_TYPE_RELATIVE, STRVT("RELATIVE")},
@@ -1174,10 +1181,9 @@ int elfc_parse_reladyn_section(elfc_t *elfc, u64 off, u64 size, u8 class, uint d
 	default: return 1;
 	}
 
-	size_t end = off + size;
-	while (off < end) {
+	while (cur < end) {
 		void *data = tbl_add_row(&sect->data.reladyn.tbl, NULL);
-		read_layout(ELFC_BIN(elfc), &off, &sect->data.reladyn.tbl.schema, layout, data);
+		read_layout(ELFC_BIN(elfc), &cur, &sect->data.reladyn.tbl.schema, layout, data);
 	}
 
 	elfc_reladyn_name_map_t priv = {
