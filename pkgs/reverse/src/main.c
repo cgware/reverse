@@ -6,8 +6,8 @@
 #include "fs.h"
 #include "gen_asm.h"
 #include "image.h"
-#include "ir.h"
-#include "ir_ssa.h"
+#include "llir.h"
+#include "llir_ssa.h"
 #include "log.h"
 #include "mem.h"
 
@@ -36,34 +36,34 @@ static int print_asm_output(fs_t *fs, const gen_asm_driver_t *asm_drv, const asm
 	return 0;
 }
 
-static int print_ir_output(fs_t *fs, const ir_t *ir)
+static int print_llir_output(fs_t *fs, const llir_t *llir)
 {
 	if (ensure_out_dir(fs)) {
 		return 1;
 	}
 
 	void *file = NULL;
-	if (fs_open(fs, STRV("out/main.ir"), "w", &file)) {
+	if (fs_open(fs, STRV("out/main.llir"), "w", &file)) {
 		return 1;
 	}
 
-	ir_print_blocks(ir, DST_FS(fs, file));
+	llir_print_blocks(llir, DST_FS(fs, file));
 	fs_close(fs, file);
 	return 0;
 }
 
-static int print_ssa_output(fs_t *fs, const ir_ssa_t *ssa)
+static int print_llir_ssa_output(fs_t *fs, const llir_ssa_t *ssa)
 {
 	if (ensure_out_dir(fs)) {
 		return 1;
 	}
 
 	void *file = NULL;
-	if (fs_open(fs, STRV("out/main.ssa"), "w", &file)) {
+	if (fs_open(fs, STRV("out/main.llir_ssa"), "w", &file)) {
 		return 1;
 	}
 
-	ir_ssa_print(ssa, DST_FS(fs, file));
+	llir_ssa_print(ssa, DST_FS(fs, file));
 	fs_close(fs, file);
 	return 0;
 }
@@ -209,7 +209,7 @@ int main(int argc, const char **argv)
 	int asmc_ready	= 0;
 	int bin_ready	= 0;
 	int image_ready = 0;
-	int ir_ready	= 0;
+	int llir_ready	= 0;
 
 	fs_t fs = {0};
 	fs_init(&fs, 0, 0, ALLOC_STD);
@@ -226,7 +226,7 @@ int main(int argc, const char **argv)
 		asmc_ready = 1;
 	}
 
-	ir_t ir = {0};
+	llir_t llir = {0};
 
 	bin_t bin = {0};
 	if (ret == 0 && bin_init(&bin, 28400, ALLOC_STD) == NULL) {
@@ -288,25 +288,25 @@ int main(int argc, const char **argv)
 			if (ret == 0) {
 				ret = format_drv->emit(format_drv, &image, &asmc, ALLOC_STD);
 			}
-			uint ir_cap = asmc.ops.cnt == 0 ? 1 : asmc.ops.cnt;
-			if (ret == 0 && ir_init(&ir, ir_cap, ALLOC_STD) == NULL) {
+			uint llir_cap = asmc.ops.cnt == 0 ? 1 : asmc.ops.cnt;
+			if (ret == 0 && llir_init(&llir, llir_cap, ALLOC_STD) == NULL) {
 				ret = 1;
 			} else if (ret == 0) {
-				ir_ready = 1;
-				log_info("reverse", "main", NULL, "Generating IR");
-				ir_gen(&ir, &asmc);
-				ir_blocks(&ir);
-				ret = print_ir_output(&fs, &ir);
+				llir_ready = 1;
+				log_info("reverse", "main", NULL, "Generating LLIR");
+				llir_gen(&llir, &asmc);
+				llir_blocks(&llir);
+				ret = print_llir_output(&fs, &llir);
 				if (ret == 0) {
-					ir_ssa_t ssa = {0};
-					if (ir_ssa_init(&ssa, ALLOC_STD) == NULL) {
+					llir_ssa_t ssa = {0};
+					if (llir_ssa_init(&ssa, ALLOC_STD) == NULL) {
 						ret = 1;
 					} else {
-						ret = ir_ssa_gen(&ssa, &ir);
+						ret = llir_ssa_gen(&ssa, &llir);
 						if (ret == 0) {
-							ret = print_ssa_output(&fs, &ssa);
+							ret = print_llir_ssa_output(&fs, &ssa);
 						}
-						ir_ssa_free(&ssa);
+						llir_ssa_free(&ssa);
 					}
 				}
 			}
@@ -328,8 +328,8 @@ int main(int argc, const char **argv)
 		}
 	}
 
-	if (ir_ready) {
-		ir_free(&ir);
+	if (llir_ready) {
+		llir_free(&llir);
 	}
 	if (image_ready && format_drv != NULL && format_drv->free != NULL) {
 		format_drv->free(format_drv, &image);
