@@ -7,6 +7,7 @@
 #include "gen_asm.h"
 #include "image.h"
 #include "ir.h"
+#include "ir_ssa.h"
 #include "log.h"
 #include "mem.h"
 
@@ -47,6 +48,22 @@ static int print_ir_output(fs_t *fs, const ir_t *ir)
 	}
 
 	ir_print_blocks(ir, DST_FS(fs, file));
+	fs_close(fs, file);
+	return 0;
+}
+
+static int print_ssa_output(fs_t *fs, const ir_ssa_t *ssa)
+{
+	if (ensure_out_dir(fs)) {
+		return 1;
+	}
+
+	void *file = NULL;
+	if (fs_open(fs, STRV("out/main.ssa"), "w", &file)) {
+		return 1;
+	}
+
+	ir_ssa_print(ssa, DST_FS(fs, file));
 	fs_close(fs, file);
 	return 0;
 }
@@ -280,6 +297,18 @@ int main(int argc, const char **argv)
 				ir_gen(&ir, &asmc);
 				ir_blocks(&ir);
 				ret = print_ir_output(&fs, &ir);
+				if (ret == 0) {
+					ir_ssa_t ssa = {0};
+					if (ir_ssa_init(&ssa, ALLOC_STD) == NULL) {
+						ret = 1;
+					} else {
+						ret = ir_ssa_gen(&ssa, &ir);
+						if (ret == 0) {
+							ret = print_ssa_output(&fs, &ssa);
+						}
+						ir_ssa_free(&ssa);
+					}
+				}
 			}
 			if (ret == 0) {
 				gen_asm_driver_t *asm_drv = asm_gen == 0 ? gen_asm_driver_find(arch_drv->name) : asm_drivers[asm_gen].priv;
