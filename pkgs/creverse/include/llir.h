@@ -53,6 +53,10 @@ typedef struct llir_op_s {
 	byte remove;
 	llir_val_t dst_sub;
 	llir_val_t src_sub;
+	asmc_op_t asmc;
+	strv_t asmc_str;
+	byte asmc_valid;
+	byte asmc_has_str;
 } llir_op_t;
 
 typedef struct llir_block_s {
@@ -74,6 +78,7 @@ void llir_blocks(llir_t *llir);
 void llir_substitude(llir_t *llir);
 
 void llir_cleanup(const llir_t *src, llir_t *dst);
+int llir_emit_asmc(const llir_t *llir, asmc_t *asmc);
 
 size_t llir_print(const llir_t *llir, dst_t dst);
 

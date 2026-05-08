@@ -224,6 +224,7 @@ int main(int argc, const char **argv)
 
 	int ret		= 0;
 	int asmc_ready	= 0;
+	int asmc_llir_ready = 0;
 	int bin_ready	= 0;
 	int bin_out_ready = 0;
 	int image_ready = 0;
@@ -243,6 +244,8 @@ int main(int argc, const char **argv)
 	} else if (ret == 0) {
 		asmc_ready = 1;
 	}
+
+	asmc_t asmc_llir = {0};
 
 	llir_t llir = {0};
 
@@ -336,6 +339,16 @@ int main(int argc, const char **argv)
 				}
 			}
 			if (ret == 0) {
+				uint asmc_llir_cap = asmc.ops.cnt == 0 ? 1 : asmc.ops.cnt;
+				if (asmc_init(&asmc_llir, asmc_llir_cap, ALLOC_STD) == NULL) {
+					ret = 1;
+				} else {
+					asmc_llir_ready = 1;
+					log_info("reverse", "main", NULL, "Reconstructing ASMC from LLIR");
+					ret = llir_emit_asmc(&llir, &asmc_llir);
+				}
+			}
+			if (ret == 0) {
 				gen_asm_driver_t *asm_drv = asm_gen == 0 ? gen_asm_driver_find(arch_drv->name) : asm_drivers[asm_gen].priv;
 				if (asm_drv == NULL) {
 					log_error("reverse", "main", NULL, "Failed to detect assembly generator driver");
@@ -347,11 +360,11 @@ int main(int argc, const char **argv)
 						 "Generating assembly with %.*s",
 						 (int)asm_drv->name.len,
 						 asm_drv->name.data);
-					ret = print_asm_output(&fs, asm_drv, &asmc);
+					ret = print_asm_output(&fs, asm_drv, &asmc_llir);
 				}
 			}
 			if (ret == 0) {
-				ret = asmc_emit_bin(&asmc, &bin_out, &bin);
+				ret = asmc_emit_bin(&asmc_llir, &bin_out, &bin);
 			}
 			if (ret == 0) {
 				ret = print_bin_output(&fs, &bin_out);
@@ -376,6 +389,9 @@ int main(int argc, const char **argv)
 	}
 	if (asmc_ready) {
 		asmc_free(&asmc);
+	}
+	if (asmc_llir_ready) {
+		asmc_free(&asmc_llir);
 	}
 	fs_free(&fs);
 	mem_free(format_drivers, format_drivers_cnt * sizeof(opt_enum_val_t));

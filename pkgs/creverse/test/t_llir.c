@@ -15,6 +15,24 @@ static llir_op_t *t_ir_add(llir_t *llir, u64 addr, llir_op_type_t type)
 	return op;
 }
 
+static int t_llir_realloc_fail(alloc_t *alloc, void **ptr, size_t *old_size, size_t new_size)
+{
+	(void)alloc;
+	(void)ptr;
+	(void)old_size;
+	(void)new_size;
+	return 1;
+}
+
+static alloc_t t_llir_alloc_realloc_fail(void)
+{
+	return (alloc_t){
+		.alloc   = alloc_alloc_std,
+		.realloc = t_llir_realloc_fail,
+		.free    = alloc_free_std,
+	};
+}
+
 static int t_ir_str_contains(strv_t haystack, strv_t needle)
 {
 	if (needle.len == 0) {
@@ -499,6 +517,155 @@ TEST(llir_coverage)
 	END;
 }
 
+TEST(llir_emit_asmc_null)
+{
+	START;
+
+	asmc_t asmc = {0};
+	llir_t llir = {0};
+	EXPECT_EQ(asmc_init(&asmc, 1, ALLOC_STD), &asmc);
+	EXPECT_EQ(llir_init(&llir, 1, ALLOC_STD), &llir);
+
+	EXPECT_EQ(llir_emit_asmc(NULL, &asmc), 1);
+	EXPECT_EQ(llir_emit_asmc(&llir, NULL), 1);
+
+	llir_free(&llir);
+	asmc_free(&asmc);
+
+	END;
+}
+
+TEST(llir_emit_asmc_roundtrip)
+{
+	START;
+
+	asmc_t src = {0};
+	asmc_t out = {0};
+	llir_t llir = {0};
+
+	EXPECT_EQ(asmc_init(&src, 4, ALLOC_STD), &src);
+	EXPECT_EQ(asmc_init(&out, 4, ALLOC_STD), &out);
+	EXPECT_EQ(llir_init(&llir, 4, ALLOC_STD), &llir);
+
+	asmc_op_t *op = asmc_add_op(&src, 0x10, ASMC_OP_MOV);
+	EXPECT_NE(op, NULL);
+	if (op != NULL) {
+		op->dst = (asmc_oper_t){.addr = ASMC_ADDR_REG, .size = 8, .val = ASMC_REG_A};
+		op->src = (asmc_oper_t){.addr = ASMC_ADDR_IMM, .size = 8, .val = 0x12};
+	}
+
+	op = asmc_add_op(&src, 0x20, ASMC_OP_LABEL);
+	EXPECT_NE(op, NULL);
+	if (op != NULL) {
+		EXPECT_EQ(strvbuf_add(&src.strs, STRV("L_0020"), &op->str), 0);
+	}
+
+	log_set_quiet(0, 1);
+	llir_gen(&llir, &src);
+	log_set_quiet(0, 0);
+
+	EXPECT_EQ(llir_emit_asmc(&llir, &out), 0);
+	EXPECT_EQ(out.ops.cnt, src.ops.cnt);
+
+	asmc_op_t *out_label = arr_get(&out.ops, 1);
+	EXPECT_NE(out_label, NULL);
+	if (out_label != NULL) {
+		EXPECT_EQ(out_label->type, ASMC_OP_LABEL);
+		EXPECT_NE(strv_eq(strvbuf_get(&out.strs, out_label->str), STRV("L_0020")), 0);
+	}
+
+	llir_free(&llir);
+	asmc_free(&out);
+	asmc_free(&src);
+
+	END;
+}
+
+TEST(llir_emit_asmc_requires_source_op)
+{
+	START;
+
+	llir_t llir = {0};
+	asmc_t asmc = {0};
+	EXPECT_EQ(llir_init(&llir, 1, ALLOC_STD), &llir);
+	EXPECT_EQ(asmc_init(&asmc, 1, ALLOC_STD), &asmc);
+	EXPECT_NE(t_ir_add(&llir, 0x44, LLIR_OP_SET), NULL);
+
+	log_set_quiet(0, 1);
+	EXPECT_EQ(llir_emit_asmc(&llir, &asmc), 1);
+	log_set_quiet(0, 0);
+
+	asmc_free(&asmc);
+	llir_free(&llir);
+
+	END;
+}
+
+TEST(llir_emit_asmc_add_op_failure)
+{
+	START;
+
+	llir_t llir = {0};
+	EXPECT_EQ(llir_init(&llir, 2, ALLOC_STD), &llir);
+
+	llir_op_t *op = t_ir_add(&llir, 0x10, LLIR_OP_SET);
+	EXPECT_NE(op, NULL);
+	if (op != NULL) {
+		op->asmc_valid = 1;
+		op->asmc.addr  = 0x10;
+		op->asmc.type  = ASMC_OP_NOP;
+	}
+
+	op = t_ir_add(&llir, 0x11, LLIR_OP_SET);
+	EXPECT_NE(op, NULL);
+	if (op != NULL) {
+		op->asmc_valid = 1;
+		op->asmc.addr  = 0x11;
+		op->asmc.type  = ASMC_OP_NOP;
+	}
+
+	alloc_t fail = t_llir_alloc_realloc_fail();
+	asmc_t asmc  = {0};
+	EXPECT_EQ(asmc_init(&asmc, 1, fail), &asmc);
+
+	log_set_quiet(0, 1);
+	EXPECT_EQ(llir_emit_asmc(&llir, &asmc), 1);
+	log_set_quiet(0, 0);
+
+	asmc_free(&asmc);
+	llir_free(&llir);
+
+	END;
+}
+
+TEST(llir_emit_asmc_missing_string_metadata)
+{
+	START;
+
+	llir_t llir = {0};
+	asmc_t asmc = {0};
+	EXPECT_EQ(llir_init(&llir, 1, ALLOC_STD), &llir);
+	EXPECT_EQ(asmc_init(&asmc, 1, ALLOC_STD), &asmc);
+
+	llir_op_t *op = t_ir_add(&llir, 0x20, LLIR_OP_SET);
+	EXPECT_NE(op, NULL);
+	if (op != NULL) {
+		op->asmc_valid = 1;
+		op->asmc.addr  = 0x20;
+		op->asmc.type  = ASMC_OP_LABEL;
+		op->asmc_has_str = 0;
+	}
+
+	log_set_quiet(0, 1);
+	EXPECT_EQ(llir_emit_asmc(&llir, &asmc), 1);
+	log_set_quiet(0, 0);
+
+	asmc_free(&asmc);
+	llir_free(&llir);
+
+	END;
+}
+
 STEST(llir)
 {
 	SSTART;
@@ -509,6 +676,11 @@ STEST(llir)
 	RUN(llir_substitude_aliases);
 	RUN(llir_print);
 	RUN(llir_coverage);
+	RUN(llir_emit_asmc_null);
+	RUN(llir_emit_asmc_roundtrip);
+	RUN(llir_emit_asmc_requires_source_op);
+	RUN(llir_emit_asmc_add_op_failure);
+	RUN(llir_emit_asmc_missing_string_metadata);
 
 	SEND;
 }

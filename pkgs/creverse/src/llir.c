@@ -5,6 +5,17 @@
 #include "log.h"
 #include "type.h"
 
+static int llir_asmc_op_has_str(asmc_op_type_t type)
+{
+	switch (type) {
+	case ASMC_OP_SECTION:
+	case ASMC_OP_GLOBAL:
+	case ASMC_OP_LABEL:
+	case ASMC_OP_STRING: return 1;
+	default: return 0;
+	}
+}
+
 llir_t *llir_init(llir_t *llir, uint cap, alloc_t alloc)
 {
 	if (llir == NULL) {
@@ -55,6 +66,12 @@ void llir_gen(llir_t *llir, const asmc_t *asmc)
 		llir_op->addr	   = op->addr;
 		llir_op->block_start = 0;
 		llir_op->remove	   = 0;
+		llir_op->asmc	   = *op;
+		llir_op->asmc_valid  = 1;
+		if (llir_asmc_op_has_str(op->type)) {
+			llir_op->asmc_str	= strvbuf_get(&asmc->strs, op->str);
+			llir_op->asmc_has_str = 1;
+		}
 
 		switch (op->dst.addr) {
 		case ASMC_ADDR_REG: {
@@ -452,6 +469,38 @@ void llir_cleanup(const llir_t *src, llir_t *dst)
 		tmp->block_start = block_start;
 		block_start	 = 0;
 	}
+}
+
+int llir_emit_asmc(const llir_t *llir, asmc_t *asmc)
+{
+	if (llir == NULL || asmc == NULL) {
+		return 1;
+	}
+
+	uint i = 0;
+	const llir_op_t *op;
+	arr_foreach(&llir->ops, i, op)
+	{
+		if (!op->asmc_valid) {
+			log_error("reverse", "llir", NULL, "llir op at 0x%04X has no source asmc op", op->addr);
+			return 1;
+		}
+
+		asmc_op_t *dst = asmc_add_op(asmc, op->asmc.addr, op->asmc.type);
+		if (dst == NULL) {
+			return 1;
+		}
+
+		*dst = op->asmc;
+
+		if (llir_asmc_op_has_str(dst->type)) {
+			if (!op->asmc_has_str || strvbuf_add(&asmc->strs, op->asmc_str, &dst->str)) {
+				return 1;
+			}
+		}
+	}
+
+	return 0;
 }
 
 static size_t llir_print_imm(llir_val_t val, dst_t dst)
