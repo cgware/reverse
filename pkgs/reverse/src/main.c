@@ -1,6 +1,7 @@
 #include "arch.h"
 #include "args.h"
 #include "asmc.h"
+#include "asmc_bin.h"
 #include "bin.h"
 #include "format.h"
 #include "fs.h"
@@ -66,6 +67,22 @@ static int print_llir_ssa_output(fs_t *fs, const llir_ssa_t *ssa)
 	llir_ssa_print(ssa, DST_FS(fs, file));
 	fs_close(fs, file);
 	return 0;
+}
+
+static int print_bin_output(fs_t *fs, const bin_t *bin)
+{
+	if (ensure_out_dir(fs)) {
+		return 1;
+	}
+
+	void *file = NULL;
+	if (fs_open(fs, STRV("out/main.bin"), "wb", &file)) {
+		return 1;
+	}
+
+	int ret = fs_write(fs, file, STRVN(bin->buf.data, bin->buf.used));
+	fs_close(fs, file);
+	return ret != 0;
 }
 
 static int parse_format_image(fs_t *fs, const format_driver_t *format_drv, const bin_t *bin, reverse_image_t *image)
@@ -208,6 +225,7 @@ int main(int argc, const char **argv)
 	int ret		= 0;
 	int asmc_ready	= 0;
 	int bin_ready	= 0;
+	int bin_out_ready = 0;
 	int image_ready = 0;
 	int llir_ready	= 0;
 
@@ -242,6 +260,13 @@ int main(int argc, const char **argv)
 
 	if (ret == 0) {
 		log_info("reverse", "main", NULL, "Read %zu bytes", bin.buf.used);
+	}
+
+	bin_t bin_out = {0};
+	if (ret == 0 && bin_init(&bin_out, bin.buf.used > 0 ? bin.buf.used : 1, ALLOC_STD) == NULL) {
+		ret = 1;
+	} else if (ret == 0) {
+		bin_out_ready = 1;
 	}
 
 	format_driver_t *format_drv = NULL;
@@ -325,6 +350,12 @@ int main(int argc, const char **argv)
 					ret = print_asm_output(&fs, asm_drv, &asmc);
 				}
 			}
+			if (ret == 0) {
+				ret = asmc_emit_bin(&asmc, &bin_out, &bin);
+			}
+			if (ret == 0) {
+				ret = print_bin_output(&fs, &bin_out);
+			}
 		}
 	}
 
@@ -339,6 +370,9 @@ int main(int argc, const char **argv)
 	}
 	if (bin_ready) {
 		bin_free(&bin);
+	}
+	if (bin_out_ready) {
+		bin_free(&bin_out);
 	}
 	if (asmc_ready) {
 		asmc_free(&asmc);

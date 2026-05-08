@@ -4,6 +4,7 @@
 
 STEST(arch);
 STEST(asmc);
+STEST(asmc_bin);
 STEST(format);
 STEST(format_elf);
 STEST(format_rtl8373n);
@@ -22,6 +23,7 @@ TEST(creverse)
 
 	RUN(arch);
 	RUN(asmc);
+	RUN(asmc_bin);
 	RUN(format);
 	RUN(format_elf);
 	RUN(format_rtl8373n);
