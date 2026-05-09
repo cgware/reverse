@@ -12,6 +12,7 @@
 #include "llir_asmc.h"
 #include "asmc_llir.h"
 #include "llir_ssa.h"
+#include "llir_vars.h"
 #include "log.h"
 #include "mem.h"
 
@@ -84,6 +85,22 @@ static int print_llir_expr_file(fs_t *fs, const llir_expr_t *expr, strv_t path)
 	}
 
 	llir_expr_print(expr, DST_FS(fs, file));
+	fs_close(fs, file);
+	return 0;
+}
+
+static int print_llir_vars_file(fs_t *fs, const llir_vars_t *vars, const llir_expr_t *expr, strv_t path)
+{
+	if (ensure_out_dir(fs)) {
+		return 1;
+	}
+
+	void *file = NULL;
+	if (fs_open(fs, path, "w", &file)) {
+		return 1;
+	}
+
+	llir_vars_print(vars, expr, DST_FS(fs, file));
 	fs_close(fs, file);
 	return 0;
 }
@@ -382,8 +399,22 @@ int main(int argc, const char **argv)
 									log_info("reverse", "main", NULL, "Step: write expressions to out/main.llir_expr");
 									ret = print_llir_expr_file(&fs, &expr, STRV("out/main.llir_expr"));
 								}
-								llir_expr_free(&expr);
 							}
+							if (ret == 0) {
+								log_info("reverse", "main", NULL, "Step: EXPR -> VARS");
+								llir_vars_t vars = {0};
+								if (llir_vars_init(&vars, llir_cap, ALLOC_STD) == NULL) {
+									ret = 1;
+								} else {
+									ret = llir_vars_gen(&vars, &expr);
+									if (ret == 0) {
+										log_info("reverse", "main", NULL, "Step: write recovered variables to out/main.llir_vars");
+										ret = print_llir_vars_file(&fs, &vars, &expr, STRV("out/main.llir_vars"));
+									}
+									llir_vars_free(&vars);
+								}
+							}
+							llir_expr_free(&expr);
 						}
 						llir_ssa_free(&ssa);
 					}

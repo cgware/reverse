@@ -16,6 +16,7 @@ STEST(llir);
 STEST(llir_expr);
 STEST(llir_asmc);
 STEST(asmc_llir);
+STEST(llir_vars);
 STEST(llir_ssa);
 STEST(parse_8051);
 STEST(parse_x86);
@@ -38,6 +39,7 @@ TEST(creverse)
 	RUN(llir_expr);
 	RUN(llir_asmc);
 	RUN(asmc_llir);
+	RUN(llir_vars);
 	RUN(llir_ssa);
 	RUN(parse_8051);
 	RUN(parse_x86);
