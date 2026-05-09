@@ -13,6 +13,7 @@
 #include "llir_cflow.h"
 #include "asmc_llir.h"
 #include "llir_ssa.h"
+#include "llir_types.h"
 #include "llir_vars.h"
 #include "log.h"
 #include "mem.h"
@@ -118,6 +119,22 @@ static int print_llir_cflow_file(fs_t *fs, const llir_cflow_t *cflow, const llir
 	}
 
 	llir_cflow_print(cflow, ssa, expr, vars, DST_FS(fs, file));
+	fs_close(fs, file);
+	return 0;
+}
+
+static int print_llir_types_file(fs_t *fs, const llir_types_t *types, strv_t path)
+{
+	if (ensure_out_dir(fs)) {
+		return 1;
+	}
+
+	void *file = NULL;
+	if (fs_open(fs, path, "w", &file)) {
+		return 1;
+	}
+
+	llir_types_print(types, DST_FS(fs, file));
 	fs_close(fs, file);
 	return 0;
 }
@@ -438,6 +455,20 @@ int main(int argc, const char **argv)
 										if (ret == 0) {
 											log_info("reverse", "main", NULL, "Step: write structured control flow to out/main.llir_cflow");
 											ret = print_llir_cflow_file(&fs, &cflow, &ssa, &expr, &vars, STRV("out/main.llir_cflow"));
+										}
+										if (ret == 0) {
+											log_info("reverse", "main", NULL, "Step: EXPR -> TYPES");
+											llir_types_t types = {0};
+											if (llir_types_init(&types, llir_cap, ALLOC_STD) == NULL) {
+												ret = 1;
+											} else {
+												ret = llir_types_gen(&types, &expr, &vars, &cflow);
+												if (ret == 0) {
+													log_info("reverse", "main", NULL, "Step: write recovered types to out/main.llir_types");
+													ret = print_llir_types_file(&fs, &types, STRV("out/main.llir_types"));
+												}
+												llir_types_free(&types);
+											}
 										}
 										llir_cflow_free(&cflow);
 									}
