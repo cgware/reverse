@@ -93,7 +93,7 @@ static void llir_ssa_block_reset(llir_ssa_block_t *block)
 	arr_free(&block->dom_frontier);
 }
 
-static int llir_ssa_block_add_phi(llir_ssa_block_t *block, asmc_reg_type_t reg, alloc_t alloc)
+static int llir_ssa_block_add_phi(llir_ssa_block_t *block, llir_reg_type_t reg, alloc_t alloc)
 {
 	if (block == NULL) {
 		return 1; // LCOV_EXCL_LINE
@@ -754,7 +754,7 @@ static int llir_ssa_insert_phis(llir_ssa_t *ssa, const llir_t *llir)
 	}
 
 	uint block_cnt = ssa->blocks.cnt;
-	uint reg_cnt   = __ASMC_REG_CNT;
+	uint reg_cnt   = __LLIR_REG_CNT;
 
 	size_t defs_size = (size_t)block_cnt * reg_cnt;
 	byte *def_in	 = mem_calloc(defs_size, sizeof(*def_in));
@@ -784,7 +784,7 @@ static int llir_ssa_insert_phis(llir_ssa_t *ssa, const llir_t *llir)
 		}
 	}
 
-	for (uint reg = ASMC_REG_UNKNOWN + 1; reg < reg_cnt; reg++) {
+	for (uint reg = LLIR_REG_UNKNOWN + 1; reg < reg_cnt; reg++) {
 		for (uint i = 0; i < block_cnt; i++) {
 			in_work[i] = 0;
 		}
@@ -820,7 +820,7 @@ static int llir_ssa_insert_phis(llir_ssa_t *ssa, const llir_t *llir)
 					continue;
 				}
 
-				if (llir_ssa_block_add_phi(y_block, (asmc_reg_type_t)reg, ssa->alloc)) {
+				if (llir_ssa_block_add_phi(y_block, (llir_reg_type_t)reg, ssa->alloc)) {
 					mem_free(def_in, defs_size * sizeof(*def_in));
 					mem_free(has_phi, defs_size * sizeof(*has_phi));
 					mem_free(in_work, block_cnt * sizeof(*in_work));
@@ -881,7 +881,7 @@ static void llir_ssa_rename_block(llir_ssa_t *ssa, uint block_id, arr_t *stacks,
 		return; // LCOV_EXCL_LINE
 	}
 
-	uint pushed[__ASMC_REG_CNT] = {0};
+	uint pushed[__LLIR_REG_CNT] = {0};
 
 	uint i = 0;
 	llir_ssa_phi_t *phi;
@@ -981,7 +981,7 @@ static void llir_ssa_rename_block(llir_ssa_t *ssa, uint block_id, arr_t *stacks,
 		llir_ssa_rename_block(ssa, *child, stacks, next_ver);
 	}
 
-	for (uint reg = ASMC_REG_UNKNOWN + 1; reg < __ASMC_REG_CNT; reg++) {
+	for (uint reg = LLIR_REG_UNKNOWN + 1; reg < __LLIR_REG_CNT; reg++) {
 		if (pushed[reg] == 0) {
 			continue;
 		}
@@ -999,10 +999,10 @@ static int llir_ssa_rename(llir_ssa_t *ssa)
 		return 0;
 	}
 
-	arr_t stacks[__ASMC_REG_CNT]  = {0};
-	uint next_ver[__ASMC_REG_CNT] = {0};
+	arr_t stacks[__LLIR_REG_CNT]  = {0};
+	uint next_ver[__LLIR_REG_CNT] = {0};
 
-	for (uint reg = 0; reg < __ASMC_REG_CNT; reg++) {
+	for (uint reg = 0; reg < __LLIR_REG_CNT; reg++) {
 		if (arr_init(&stacks[reg], 4, sizeof(uint), ssa->alloc) == NULL) {
 			for (uint i = 0; i < reg; i++) {
 				arr_free(&stacks[i]);
@@ -1025,7 +1025,7 @@ static int llir_ssa_rename(llir_ssa_t *ssa)
 		llir_ssa_rename_block(ssa, block_id, stacks, next_ver);
 	}
 
-	for (uint reg = 0; reg < __ASMC_REG_CNT; reg++) {
+	for (uint reg = 0; reg < __LLIR_REG_CNT; reg++) {
 		arr_free(&stacks[reg]);
 	}
 
@@ -1110,7 +1110,7 @@ static size_t llir_ssa_print_imm(llir_val_t val, dst_t dst)
 static size_t llir_ssa_print_reg(llir_val_t val, uint ver, dst_t dst)
 {
 	size_t off = dst.off;
-	dst.off += dputf(dst, "%s_%u", asmc_reg_name((asmc_reg_type_t)val.data), ver);
+	dst.off += dputf(dst, "%s_%u", llir_reg_name((llir_reg_type_t)val.data), ver);
 	return dst.off - off;
 }
 

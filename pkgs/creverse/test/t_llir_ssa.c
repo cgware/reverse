@@ -2,6 +2,7 @@
 
 #include "log.h"
 #include "mem.h"
+#include "str.h"
 #include "test.h"
 
 typedef struct t_ir_ssa_alloc_fail_s {
@@ -150,7 +151,7 @@ static int t_ir_ssa_build_cfg_ir(llir_t *llir)
 		return 1;
 	}
 	op->block_start = 1;
-	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8};
+	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8};
 	op->src		= (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 0x10, .size = 8};
 
 	op = t_ir_ssa_add(llir, 1, LLIR_OP_IF);
@@ -158,7 +159,7 @@ static int t_ir_ssa_build_cfg_ir(llir_t *llir)
 		return 1;
 	}
 	op->subtype = LLIR_IF_NE;
-	op->src	    = (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R1, .size = 8};
+	op->src	    = (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R1, .size = 8};
 	op->cmp	    = (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 0, .size = 16};
 	op->dst	    = (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 4, .size = 16};
 
@@ -167,7 +168,7 @@ static int t_ir_ssa_build_cfg_ir(llir_t *llir)
 		return 1;
 	}
 	op->block_start = 1;
-	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8};
+	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8};
 	op->src		= (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 0x20, .size = 16};
 
 	op = t_ir_ssa_add(llir, 3, LLIR_OP_IF);
@@ -182,7 +183,7 @@ static int t_ir_ssa_build_cfg_ir(llir_t *llir)
 		return 1;
 	}
 	op->block_start = 1;
-	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8};
+	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8};
 	op->src		= (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 0x30, .size = 32};
 
 	op = t_ir_ssa_add(llir, 5, LLIR_OP_SET);
@@ -190,49 +191,49 @@ static int t_ir_ssa_build_cfg_ir(llir_t *llir)
 		return 1;
 	}
 	op->block_start = 1;
-	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R2, .size = 8};
-	op->src		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8};
+	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R2, .size = 8};
+	op->src		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8};
 
 	op = t_ir_ssa_add(llir, 6, LLIR_OP_SWAP);
 	if (op == NULL) {
 		return 1;
 	}
-	op->dst = (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8};
-	op->src = (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R1, .size = 8};
+	op->dst = (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8};
+	op->src = (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R1, .size = 8};
 
 	op = t_ir_ssa_add(llir, 7, LLIR_OP_ADD);
 	if (op == NULL) {
 		return 1;
 	}
-	op->dst = (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8};
+	op->dst = (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8};
 	op->src = (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 1, .size = 8};
 
 	op = t_ir_ssa_add(llir, 8, LLIR_OP_XOR);
 	if (op == NULL) {
 		return 1;
 	}
-	op->dst = (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8};
+	op->dst = (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8};
 	op->src = (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 2, .size = 8};
 
 	op = t_ir_ssa_add(llir, 9, LLIR_OP_OR);
 	if (op == NULL) {
 		return 1;
 	}
-	op->dst = (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8};
-	op->src = (llir_val_t){.addr = LLIR_ADDR_XRAM_REG, .data = ASMC_REG_R3, .size = 8};
+	op->dst = (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8};
+	op->src = (llir_val_t){.addr = LLIR_ADDR_XRAM_REG, .data = LLIR_REG_R3, .size = 8};
 
 	op = t_ir_ssa_add(llir, 10, LLIR_OP_AND);
 	if (op == NULL) {
 		return 1;
 	}
-	op->dst = (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8};
+	op->dst = (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8};
 	op->src = (llir_val_t){.addr = LLIR_ADDR_XRAM_IMM, .data = 0x20, .size = 8};
 
 	op = t_ir_ssa_add(llir, 11, LLIR_OP_RSHIFT);
 	if (op == NULL) {
 		return 1;
 	}
-	op->dst = (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8};
+	op->dst = (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8};
 	op->src = (llir_val_t){.addr = LLIR_ADDR_IRAM, .data = 0x30, .size = 8};
 
 	op = t_ir_ssa_add(llir, 12, LLIR_OP_IF);
@@ -240,7 +241,7 @@ static int t_ir_ssa_build_cfg_ir(llir_t *llir)
 		return 1;
 	}
 	op->subtype = LLIR_IF_DNE;
-	op->src	    = (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R1, .size = 8};
+	op->src	    = (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R1, .size = 8};
 	op->cmp	    = (llir_val_t){.addr = LLIR_ADDR_CODE, .data = 0x3456, .size = 16};
 	op->dst	    = (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 14, .size = 16};
 
@@ -249,7 +250,7 @@ static int t_ir_ssa_build_cfg_ir(llir_t *llir)
 		return 1;
 	}
 	op->subtype = LLIR_IF_EQ;
-	op->src	    = (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R2, .size = 8};
+	op->src	    = (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R2, .size = 8};
 	op->cmp	    = (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 0x55, .size = 8};
 	op->dst	    = (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 15, .size = 16};
 
@@ -279,7 +280,7 @@ static int t_ir_ssa_build_cfg_ir(llir_t *llir)
 		return 1;
 	}
 	op->block_start = 1;
-	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R4, .size = 8};
+	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R4, .size = 8};
 	op->src		= (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 0xABCD, .size = 16};
 
 	op = t_ir_ssa_add(llir, 18, LLIR_OP_SET);
@@ -287,7 +288,7 @@ static int t_ir_ssa_build_cfg_ir(llir_t *llir)
 		return 1;
 	}
 	op->block_start = 1;
-	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R4, .size = 8};
+	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R4, .size = 8};
 	op->src		= (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 0xEE, .size = 8};
 
 	op = t_ir_ssa_add(llir, 19, LLIR_OP_SET);
@@ -295,8 +296,8 @@ static int t_ir_ssa_build_cfg_ir(llir_t *llir)
 		return 1;
 	}
 	op->block_start = 1;
-	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R5, .size = 8};
-	op->src		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R4, .size = 8};
+	op->dst		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R5, .size = 8};
+	op->src		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R4, .size = 8};
 
 	op = t_ir_ssa_add(llir, 20, LLIR_OP_RET);
 	if (op == NULL) {
@@ -326,7 +327,7 @@ static int t_ir_ssa_build_dup_edge_ir(llir_t *llir)
 	}
 	op->block_start = 1;
 	op->subtype	= LLIR_IF_NE;
-	op->src		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8};
+	op->src		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8};
 	op->cmp		= (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 0, .size = 8};
 	op->dst		= (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 1, .size = 16};
 
@@ -346,7 +347,7 @@ static int t_ir_ssa_build_invalid_target_ir(llir_t *llir)
 	}
 	op->block_start = 1;
 	op->subtype	= LLIR_IF_NE;
-	op->src		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8};
+	op->src		= (llir_val_t){.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8};
 	op->cmp		= (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 0, .size = 8};
 	op->dst		= (llir_val_t){.addr = LLIR_ADDR_IMM, .data = 0xFFFF, .size = 16};
 
@@ -556,7 +557,7 @@ TEST(llir_ssa_print_exhaustive)
 		llir_ssa_phi_t *phi = arr_add(&block->phis, NULL);
 		EXPECT_NE(phi, NULL);
 		if (phi != NULL) {
-			*phi = (llir_ssa_phi_t){.reg = ASMC_REG_R0, .ver = 7};
+			*phi = (llir_ssa_phi_t){.reg = LLIR_REG_R0, .ver = 7};
 			EXPECT_NE(arr_init(&phi->args, 2, sizeof(llir_ssa_phi_arg_t), ALLOC_STD), NULL);
 			llir_ssa_phi_arg_t *arg = arr_add(&phi->args, NULL);
 			EXPECT_NE(arg, NULL);
@@ -574,7 +575,7 @@ TEST(llir_ssa_print_exhaustive)
 	llir_ssa_inst_t *inst = t_ir_ssa_add_inst(&ssa,
 						(llir_op_t){.addr = 0,
 							  .type = LLIR_OP_SET,
-							  .dst	= {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8},
+							  .dst	= {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
 							  .src	= {.addr = LLIR_ADDR_IMM, .data = 1, .size = 8}});
 	EXPECT_NE(inst, NULL);
 	if (inst != NULL) {
@@ -594,13 +595,13 @@ TEST(llir_ssa_print_exhaustive)
 	t_ir_ssa_add_inst(&ssa,
 			  (llir_op_t){.addr = 3,
 				    .type = LLIR_OP_SET,
-				    .dst  = {.addr = LLIR_ADDR_XRAM_REG, .data = ASMC_REG_R1, .size = 8},
+				    .dst  = {.addr = LLIR_ADDR_XRAM_REG, .data = LLIR_REG_R1, .size = 8},
 				    .src  = {.addr = LLIR_ADDR_IMM, .data = 0x123456789ULL, .size = 64}});
 	t_ir_ssa_add_inst(&ssa,
 			  (llir_op_t){.addr = 4,
 				    .type = LLIR_OP_SET,
 				    .dst  = {.addr = LLIR_ADDR_CODE, .data = 0x400, .size = 16},
-				    .src  = {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R2, .size = 8}});
+				    .src  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R2, .size = 8}});
 	t_ir_ssa_add_inst(&ssa,
 			  (llir_op_t){.addr = 5,
 				    .type = LLIR_OP_SET,
@@ -610,8 +611,8 @@ TEST(llir_ssa_print_exhaustive)
 	inst = t_ir_ssa_add_inst(&ssa,
 				 (llir_op_t){.addr = 6,
 					   .type = LLIR_OP_SWAP,
-					   .dst	 = {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R0, .size = 8},
-					   .src	 = {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R1, .size = 8}});
+					   .dst	 = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					   .src	 = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R1, .size = 8}});
 	EXPECT_NE(inst, NULL);
 	if (inst != NULL) {
 		inst->dst_ver	  = 1;
@@ -623,8 +624,8 @@ TEST(llir_ssa_print_exhaustive)
 	inst = t_ir_ssa_add_inst(&ssa,
 				 (llir_op_t){.addr = 7,
 					   .type = LLIR_OP_SWAP,
-					   .dst	 = {.addr = LLIR_ADDR_XRAM_REG, .data = ASMC_REG_R0, .size = 8},
-					   .src	 = {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R2, .size = 8}});
+					   .dst	 = {.addr = LLIR_ADDR_XRAM_REG, .data = LLIR_REG_R0, .size = 8},
+					   .src	 = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R2, .size = 8}});
 	EXPECT_NE(inst, NULL);
 	if (inst != NULL) {
 		inst->dst_ver = 3;
@@ -634,48 +635,48 @@ TEST(llir_ssa_print_exhaustive)
 	t_ir_ssa_add_inst(&ssa,
 			  (llir_op_t){.addr = 8,
 				    .type = LLIR_OP_ADD,
-				    .dst  = {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R3, .size = 8},
+				    .dst  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R3, .size = 8},
 				    .src  = {.addr = LLIR_ADDR_IMM, .data = 2, .size = 8}});
 	t_ir_ssa_add_inst(&ssa,
 			  (llir_op_t){.addr = 9,
 				    .type = LLIR_OP_XOR,
-				    .dst  = {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R3, .size = 8},
+				    .dst  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R3, .size = 8},
 				    .src  = {.addr = LLIR_ADDR_IMM, .data = 3, .size = 8}});
 	t_ir_ssa_add_inst(&ssa,
 			  (llir_op_t){.addr = 10,
 				    .type = LLIR_OP_OR,
-				    .dst  = {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R3, .size = 8},
+				    .dst  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R3, .size = 8},
 				    .src  = {.addr = LLIR_ADDR_IMM, .data = 4, .size = 8}});
 	t_ir_ssa_add_inst(&ssa,
 			  (llir_op_t){.addr = 11,
 				    .type = LLIR_OP_AND,
-				    .dst  = {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R3, .size = 8},
+				    .dst  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R3, .size = 8},
 				    .src  = {.addr = LLIR_ADDR_IMM, .data = 5, .size = 8}});
 	t_ir_ssa_add_inst(&ssa,
 			  (llir_op_t){.addr = 12,
 				    .type = LLIR_OP_RSHIFT,
-				    .dst  = {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R3, .size = 8},
+				    .dst  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R3, .size = 8},
 				    .src  = {.addr = LLIR_ADDR_IMM, .data = 1, .size = 8}});
 
 	t_ir_ssa_add_inst(&ssa,
 			  (llir_op_t){.addr    = 13,
 				    .type    = LLIR_OP_IF,
 				    .subtype = LLIR_IF_NE,
-				    .src     = {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R4, .size = 8},
+				    .src     = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R4, .size = 8},
 				    .cmp     = {.addr = LLIR_ADDR_IMM, .data = 0, .size = 8},
 				    .dst     = {.addr = LLIR_ADDR_IMM, .data = 0x50, .size = 16}});
 	t_ir_ssa_add_inst(&ssa,
 			  (llir_op_t){.addr    = 14,
 				    .type    = LLIR_OP_IF,
 				    .subtype = LLIR_IF_DNE,
-				    .src     = {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R4, .size = 8},
+				    .src     = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R4, .size = 8},
 				    .cmp     = {.addr = LLIR_ADDR_IMM, .data = 1, .size = 8},
 				    .dst     = {.addr = LLIR_ADDR_IMM, .data = 0x60, .size = 16}});
 	t_ir_ssa_add_inst(&ssa,
 			  (llir_op_t){.addr    = 15,
 				    .type    = LLIR_OP_IF,
 				    .subtype = LLIR_IF_EQ,
-				    .src     = {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R4, .size = 8},
+				    .src     = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R4, .size = 8},
 				    .cmp     = {.addr = LLIR_ADDR_IMM, .data = 2, .size = 8},
 				    .dst     = {.addr = LLIR_ADDR_IMM, .data = 0x70, .size = 16}});
 	t_ir_ssa_add_inst(
@@ -685,7 +686,7 @@ TEST(llir_ssa_print_exhaustive)
 			  (llir_op_t){.addr    = 17,
 				    .type    = LLIR_OP_IF,
 				    .subtype = (llir_if_type_t)99,
-				    .src     = {.addr = LLIR_ADDR_REG, .data = ASMC_REG_R4, .size = 8},
+				    .src     = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R4, .size = 8},
 				    .cmp     = {.addr = LLIR_ADDR_IMM, .data = 3, .size = 8},
 				    .dst     = {.addr = LLIR_ADDR_IMM, .data = 0x90, .size = 16}});
 	t_ir_ssa_add_inst(&ssa, (llir_op_t){.addr = 18, .type = LLIR_OP_CALL, .dst = {.addr = LLIR_ADDR_IMM, .data = 0xAAAA, .size = 16}});

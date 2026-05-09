@@ -9,7 +9,7 @@ typedef struct llir_ssa_phi_arg_s {
 } llir_ssa_phi_arg_t;
 
 typedef struct llir_ssa_phi_s {
-	asmc_reg_type_t reg;
+	llir_reg_type_t reg;
 	uint ver;
 	arr_t args;
 } llir_ssa_phi_t;

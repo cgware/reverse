@@ -1,19 +1,96 @@
 #include "llir.h"
 
 #include "arr.h"
-#include "asmc.h"
 #include "log.h"
 #include "type.h"
 
-static int llir_asmc_op_has_str(asmc_op_type_t type)
+static const char *s_llir_reg_type_str[__LLIR_REG_CNT] = {
+	[LLIR_REG_UNKNOWN] = "UNKNOWN",
+	[LLIR_REG_AL] = "AL",
+	[LLIR_REG_CL] = "CL",
+	[LLIR_REG_DL] = "DL",
+	[LLIR_REG_BL] = "BL",
+	[LLIR_REG_SPL] = "SPL",
+	[LLIR_REG_BPL] = "BPL",
+	[LLIR_REG_SIL] = "SIL",
+	[LLIR_REG_DIL] = "DIL",
+	[LLIR_REG_R8B] = "R8B",
+	[LLIR_REG_R9B] = "R9B",
+	[LLIR_REG_R10B] = "R10B",
+	[LLIR_REG_R11B] = "R11B",
+	[LLIR_REG_R12B] = "R12B",
+	[LLIR_REG_R13B] = "R13B",
+	[LLIR_REG_R14B] = "R14B",
+	[LLIR_REG_R15B] = "R15B",
+	[LLIR_REG_AX] = "AX",
+	[LLIR_REG_CX] = "CX",
+	[LLIR_REG_DX] = "DX",
+	[LLIR_REG_BX] = "BX",
+	[LLIR_REG_SP] = "SP",
+	[LLIR_REG_BP] = "BP",
+	[LLIR_REG_SI] = "SI",
+	[LLIR_REG_DI] = "DI",
+	[LLIR_REG_R8W] = "R8W",
+	[LLIR_REG_R9W] = "R9W",
+	[LLIR_REG_R10W] = "R10W",
+	[LLIR_REG_R11W] = "R11W",
+	[LLIR_REG_R12W] = "R12W",
+	[LLIR_REG_R13W] = "R13W",
+	[LLIR_REG_R14W] = "R14W",
+	[LLIR_REG_R15W] = "R15W",
+	[LLIR_REG_EAX] = "EAX",
+	[LLIR_REG_ECX] = "ECX",
+	[LLIR_REG_EDX] = "EDX",
+	[LLIR_REG_EBX] = "EBX",
+	[LLIR_REG_ESP] = "ESP",
+	[LLIR_REG_EBP] = "EBP",
+	[LLIR_REG_ESI] = "ESI",
+	[LLIR_REG_EDI] = "EDI",
+	[LLIR_REG_R8D] = "R8D",
+	[LLIR_REG_R9D] = "R9D",
+	[LLIR_REG_R10D] = "R10D",
+	[LLIR_REG_R11D] = "R11D",
+	[LLIR_REG_R12D] = "R12D",
+	[LLIR_REG_R13D] = "R13D",
+	[LLIR_REG_R14D] = "R14D",
+	[LLIR_REG_R15D] = "R15D",
+	[LLIR_REG_RAX] = "RAX",
+	[LLIR_REG_RCX] = "RCX",
+	[LLIR_REG_RDX] = "RDX",
+	[LLIR_REG_RBX] = "RBX",
+	[LLIR_REG_RSP] = "RSP",
+	[LLIR_REG_RBP] = "RBP",
+	[LLIR_REG_RSI] = "RSI",
+	[LLIR_REG_RDI] = "RDI",
+	[LLIR_REG_R0] = "R0",
+	[LLIR_REG_R1] = "R1",
+	[LLIR_REG_R2] = "R2",
+	[LLIR_REG_R3] = "R3",
+	[LLIR_REG_R4] = "R4",
+	[LLIR_REG_R5] = "R5",
+	[LLIR_REG_R6] = "R6",
+	[LLIR_REG_R7] = "R7",
+	[LLIR_REG_R8] = "R8",
+	[LLIR_REG_R9] = "R9",
+	[LLIR_REG_R10] = "R10",
+	[LLIR_REG_R11] = "R11",
+	[LLIR_REG_R12] = "R12",
+	[LLIR_REG_R13] = "R13",
+	[LLIR_REG_R14] = "R14",
+	[LLIR_REG_R15] = "R15",
+	[LLIR_REG_A] = "A",
+	[LLIR_REG_B] = "B",
+	[LLIR_REG_C] = "C",
+	[LLIR_REG_DPTR] = "DPTR",
+};
+
+const char *llir_reg_name(llir_reg_type_t reg)
 {
-	switch (type) {
-	case ASMC_OP_SECTION:
-	case ASMC_OP_GLOBAL:
-	case ASMC_OP_LABEL:
-	case ASMC_OP_STRING: return 1;
-	default: return 0;
+	if (reg < LLIR_REG_UNKNOWN || reg >= __LLIR_REG_CNT) {
+		return s_llir_reg_type_str[LLIR_REG_UNKNOWN];
 	}
+
+	return s_llir_reg_type_str[reg];
 }
 
 llir_t *llir_init(llir_t *llir, uint cap, alloc_t alloc)
@@ -53,173 +130,6 @@ static int llir_get_op_by_addr(const llir_t *llir, u64 addr, uint *id)
 	}
 
 	return 1;
-}
-
-void llir_gen(llir_t *llir, const asmc_t *asmc)
-{
-	uint i = 0;
-	asmc_op_t *op;
-	arr_foreach(&asmc->ops, i, op)
-	{
-		llir_op_t *llir_op	   = arr_add(&llir->ops, NULL);
-		*llir_op		   = (llir_op_t){0};
-		llir_op->addr	   = op->addr;
-		llir_op->block_start = 0;
-		llir_op->remove	   = 0;
-		llir_op->asmc	   = *op;
-		llir_op->asmc_valid  = 1;
-		if (llir_asmc_op_has_str(op->type)) {
-			llir_op->asmc_str	= strvbuf_get(&asmc->strs, op->str);
-			llir_op->asmc_has_str = 1;
-		}
-
-		switch (op->dst.addr) {
-		case ASMC_ADDR_REG: {
-			llir_op->dst.addr = LLIR_ADDR_REG;
-			llir_op->dst.data = op->dst.val;
-			llir_op->dst.size = op->dst.size;
-			break;
-		}
-		case ASMC_ADDR_XRAM: {
-			llir_op->dst.addr = LLIR_ADDR_XRAM_REG;
-			llir_op->dst.data = op->dst.val;
-			llir_op->dst.size = op->dst.size;
-			break;
-		}
-		case ASMC_ADDR_REL: {
-			llir_op->dst.addr = LLIR_ADDR_IMM;
-			s8 rel		= op->dst.val;
-			llir_op->dst.data = llir_op->addr + 2 + rel;
-			llir_op->dst.size = 16;
-			break;
-		}
-		case ASMC_ADDR_CODE: {
-			llir_op->dst.addr = LLIR_ADDR_CODE;
-			llir_op->dst.data = op->dst.val;
-			llir_op->dst.size = op->dst.size;
-			break;
-		}
-		default: {
-			break;
-		}
-		}
-
-		switch (op->src.addr) {
-		case ASMC_ADDR_IMM: {
-			llir_op->src.addr = LLIR_ADDR_IMM;
-			llir_op->src.data = op->src.val;
-			llir_op->src.size = op->src.size;
-			break;
-		}
-		case ASMC_ADDR_REG: {
-			llir_op->src.addr = LLIR_ADDR_REG;
-			llir_op->src.data = op->src.val;
-			llir_op->src.size = op->src.size;
-			break;
-		}
-		case ASMC_ADDR_XRAM: {
-			llir_op->src.addr = LLIR_ADDR_XRAM_REG;
-			llir_op->src.data = op->src.val;
-			llir_op->src.size = op->src.size;
-			break;
-		}
-		default: {
-			break;
-		}
-		}
-
-		switch (op->type) {
-		case ASMC_OP_MOV: {
-			llir_op->type = LLIR_OP_SET;
-			break;
-		}
-		case ASMC_OP_CLR: {
-			llir_op->type	= LLIR_OP_SET;
-			llir_op->src.addr = LLIR_ADDR_IMM;
-			llir_op->src.data = 0;
-			llir_op->src.size = op->dst.size;
-			break;
-		}
-		case ASMC_OP_SWAP: {
-			llir_op->type	= LLIR_OP_SWAP_NIBBLES;
-			llir_op->src.addr = LLIR_ADDR_IMM;
-			llir_op->src.data = 0;
-			llir_op->src.size = op->dst.size;
-			break;
-		}
-		case ASMC_OP_XCH: {
-			llir_op->type = LLIR_OP_SWAP;
-			break;
-		}
-		case ASMC_OP_INC: {
-			llir_op->type	= LLIR_OP_ADD;
-			llir_op->src.addr = LLIR_ADDR_IMM;
-			llir_op->src.data = 1;
-			llir_op->src.size = llir_op->dst.size;
-			break;
-		}
-		case ASMC_OP_XOR: {
-			llir_op->type = LLIR_OP_XOR;
-			break;
-		}
-		case ASMC_OP_OR: {
-			llir_op->type = LLIR_OP_OR;
-			break;
-		}
-		case ASMC_OP_AND: {
-			llir_op->type = LLIR_OP_AND;
-			break;
-		}
-		case ASMC_OP_RRC: {
-			llir_op->type	= LLIR_OP_RSHIFT;
-			llir_op->src.addr = LLIR_ADDR_IMM;
-			llir_op->src.data = 1;
-			llir_op->src.size = llir_op->dst.size;
-			break;
-		}
-		case ASMC_OP_JNZ: {
-			llir_op->type	= LLIR_OP_IF;
-			llir_op->subtype	= LLIR_IF_NE;
-			llir_op->cmp.addr = LLIR_ADDR_IMM;
-			llir_op->cmp.data = 0;
-			llir_op->cmp.size = llir_op->src.size;
-			break;
-		}
-		case ASMC_OP_DJNZ: {
-			llir_op->type	= LLIR_OP_IF;
-			llir_op->subtype	= LLIR_IF_DNE;
-			llir_op->cmp.addr = LLIR_ADDR_IMM;
-			llir_op->cmp.data = 0;
-			llir_op->cmp.size = llir_op->src.size;
-			break;
-		}
-		case ASMC_OP_JZ: {
-			llir_op->type	= LLIR_OP_IF;
-			llir_op->subtype	= LLIR_IF_EQ;
-			llir_op->cmp.addr = LLIR_ADDR_IMM;
-			llir_op->cmp.data = 0;
-			llir_op->cmp.size = llir_op->src.size;
-			break;
-		}
-		case ASMC_OP_JMP: {
-			llir_op->type    = LLIR_OP_IF;
-			llir_op->subtype = LLIR_IF_TRUE;
-			break;
-		}
-		case ASMC_OP_CALL: {
-			llir_op->type = LLIR_OP_CALL;
-			break;
-		}
-		case ASMC_OP_RET: {
-			llir_op->type = LLIR_OP_RET;
-			break;
-		}
-		default: {
-			log_debug("reverse", "llir", NULL, "unknown op: 0x%02X", op->type);
-			break;
-		}
-		}
-	}
 }
 
 void llir_blocks(llir_t *llir)
@@ -277,8 +187,8 @@ void llir_substitude(llir_t *llir)
 		return;
 	}
 
-	llir_val_t regs[__ASMC_REG_CNT]  = {0};
-	reg_set_t sets[__ASMC_REG_CNT] = {0};
+	llir_val_t regs[__LLIR_REG_CNT]  = {0};
+	reg_set_t sets[__LLIR_REG_CNT] = {0};
 
 	uint i = 0;
 	llir_op_t *op;
@@ -288,7 +198,7 @@ void llir_substitude(llir_t *llir)
 		op->src_sub = op->src;
 
 		if (op->block_start) {
-			for (asmc_reg_type_t reg = ASMC_REG_UNKNOWN + 1; reg < __ASMC_REG_CNT; reg++) {
+			for (llir_reg_type_t reg = LLIR_REG_UNKNOWN + 1; reg < __LLIR_REG_CNT; reg++) {
 				if (sets[reg].set) {
 					llir_op_t *set = arr_get(&llir->ops, sets[reg].id);
 					set->remove  = 0;
@@ -422,7 +332,7 @@ void llir_substitude(llir_t *llir)
 		case LLIR_OP_IF:
 		case LLIR_OP_CALL:
 		case LLIR_OP_RET: {
-			for (asmc_reg_type_t reg = ASMC_REG_UNKNOWN + 1; reg < __ASMC_REG_CNT; reg++) {
+			for (llir_reg_type_t reg = LLIR_REG_UNKNOWN + 1; reg < __LLIR_REG_CNT; reg++) {
 				if (sets[reg].set) {
 					llir_op_t *set = arr_get(&llir->ops, sets[reg].id);
 					set->remove  = 0;
@@ -471,38 +381,6 @@ void llir_cleanup(const llir_t *src, llir_t *dst)
 	}
 }
 
-int llir_emit_asmc(const llir_t *llir, asmc_t *asmc)
-{
-	if (llir == NULL || asmc == NULL) {
-		return 1;
-	}
-
-	uint i = 0;
-	const llir_op_t *op;
-	arr_foreach(&llir->ops, i, op)
-	{
-		if (!op->asmc_valid) {
-			log_error("reverse", "llir", NULL, "llir op at 0x%04X has no source asmc op", op->addr);
-			return 1;
-		}
-
-		asmc_op_t *dst = asmc_add_op(asmc, op->asmc.addr, op->asmc.type);
-		if (dst == NULL) {
-			return 1;
-		}
-
-		*dst = op->asmc;
-
-		if (llir_asmc_op_has_str(dst->type)) {
-			if (!op->asmc_has_str || strvbuf_add(&asmc->strs, op->asmc_str, &dst->str)) {
-				return 1;
-			}
-		}
-	}
-
-	return 0;
-}
-
 static size_t llir_print_imm(llir_val_t val, dst_t dst)
 {
 	size_t off = dst.off;
@@ -529,7 +407,7 @@ static size_t llir_print_reg(llir_val_t val, dst_t dst)
 {
 	size_t off = dst.off;
 
-	dst.off += dputf(dst, "%s", asmc_reg_name((asmc_reg_type_t)val.data));
+	dst.off += dputf(dst, "%s", llir_reg_name((llir_reg_type_t)val.data));
 
 	return dst.off - off;
 }

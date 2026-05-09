@@ -8,6 +8,8 @@
 #include "gen_asm.h"
 #include "image.h"
 #include "llir.h"
+#include "llir_asmc.h"
+#include "asmc_llir.h"
 #include "llir_ssa.h"
 #include "log.h"
 #include "mem.h"
@@ -110,7 +112,7 @@ int main(int argc, const char **argv)
 
 	log_t log = {0};
 	log_set(&log);
-	log_add_callback(log_std_cb, DST_STD(), LOG_DEBUG, 1, 1);
+	log_add_callback(log_std_cb, DST_STD(), LOG_INFO, 1, 1);
 
 	strv_t path = STRV("./examples/printf/bin/host-Debug/bin/printf");
 	int format  = 0;
@@ -229,6 +231,7 @@ int main(int argc, const char **argv)
 	int bin_out_ready = 0;
 	int image_ready = 0;
 	int llir_ready	= 0;
+	int llir_asmc_ready = 0;
 
 	fs_t fs = {0};
 	fs_init(&fs, 0, 0, ALLOC_STD);
@@ -245,9 +248,10 @@ int main(int argc, const char **argv)
 		asmc_ready = 1;
 	}
 
-	asmc_t asmc_llir = {0};
+	asmc_t asmc_out = {0};
 
 	llir_t llir = {0};
+	asmc_llir_ctx_t asmc_ctx = {0};
 
 	bin_t bin = {0};
 	if (ret == 0 && bin_init(&bin, 28400, ALLOC_STD) == NULL) {
@@ -262,7 +266,7 @@ int main(int argc, const char **argv)
 	}
 
 	if (ret == 0) {
-		log_info("reverse", "main", NULL, "Read %zu bytes", bin.buf.used);
+		log_info("reverse", "main", NULL, "Input loaded: %zu bytes", bin.buf.used);
 	}
 
 	bin_t bin_out = {0};
@@ -289,7 +293,7 @@ int main(int argc, const char **argv)
 	}
 
 	if (ret == 0) {
-		log_info("reverse", "main", NULL, "Parsing format with %.*s", (int)format_drv->name.len, format_drv->name.data);
+		log_info("reverse", "main", NULL, "Step: INPUT -> FORMAT (%.*s)", (int)format_drv->name.len, format_drv->name.data);
 		ret = parse_format_image(&fs, format_drv, &bin, &image);
 	}
 	if (ret == 0) {
@@ -311,27 +315,35 @@ int main(int argc, const char **argv)
 			log_error("reverse", "main", NULL, "Failed to detect architecture parser driver");
 			ret = 1;
 		} else {
-			log_info("reverse", "main", NULL, "Parsing architecture with %.*s", (int)arch_drv->name.len, arch_drv->name.data);
+			log_info("reverse", "main", NULL, "Step: FORMAT -> ARCH metadata (%.*s)", (int)arch_drv->name.len, arch_drv->name.data);
 			ret = arch_drv->parse(arch_drv, &image, ALLOC_STD);
 			if (ret == 0) {
+				log_info("reverse", "main", NULL, "Step: ARCH -> ASMC (%.*s)", (int)format_drv->name.len, format_drv->name.data);
 				ret = format_drv->emit(format_drv, &image, &asmc, ALLOC_STD);
 			}
 			uint llir_cap = asmc.ops.cnt == 0 ? 1 : asmc.ops.cnt;
 			if (ret == 0 && llir_init(&llir, llir_cap, ALLOC_STD) == NULL) {
 				ret = 1;
+			} else if (ret == 0 && asmc_llir_ctx_init(&asmc_ctx, llir_cap, ALLOC_STD) == NULL) {
+				ret = 1;
 			} else if (ret == 0) {
 				llir_ready = 1;
-				log_info("reverse", "main", NULL, "Generating LLIR");
-				llir_gen(&llir, &asmc);
+				llir_asmc_ready = 1;
+				log_info("reverse", "main", NULL, "Step: ASMC -> LLIR");
+				asmc_llir(&llir, &asmc_ctx, &asmc);
+				log_info("reverse", "main", NULL, "Step: LLIR blocks");
 				llir_blocks(&llir);
+				log_info("reverse", "main", NULL, "Step: write LLIR to out/main.llir");
 				ret = print_llir_output(&fs, &llir);
 				if (ret == 0) {
+					log_info("reverse", "main", NULL, "Step: LLIR -> SSA");
 					llir_ssa_t ssa = {0};
 					if (llir_ssa_init(&ssa, ALLOC_STD) == NULL) {
 						ret = 1;
 					} else {
 						ret = llir_ssa_gen(&ssa, &llir);
 						if (ret == 0) {
+							log_info("reverse", "main", NULL, "Step: write SSA to out/main.llir_ssa");
 							ret = print_llir_ssa_output(&fs, &ssa);
 						}
 						llir_ssa_free(&ssa);
@@ -340,12 +352,12 @@ int main(int argc, const char **argv)
 			}
 			if (ret == 0) {
 				uint asmc_llir_cap = asmc.ops.cnt == 0 ? 1 : asmc.ops.cnt;
-				if (asmc_init(&asmc_llir, asmc_llir_cap, ALLOC_STD) == NULL) {
+				if (asmc_init(&asmc_out, asmc_llir_cap, ALLOC_STD) == NULL) {
 					ret = 1;
 				} else {
 					asmc_llir_ready = 1;
-					log_info("reverse", "main", NULL, "Reconstructing ASMC from LLIR");
-					ret = llir_emit_asmc(&llir, &asmc_llir);
+					log_info("reverse", "main", NULL, "Step: LLIR -> ASMC");
+					ret = llir_asmc(&llir, &asmc_ctx, &asmc_out);
 				}
 			}
 			if (ret == 0) {
@@ -354,19 +366,16 @@ int main(int argc, const char **argv)
 					log_error("reverse", "main", NULL, "Failed to detect assembly generator driver");
 					ret = 1;
 				} else {
-					log_info("reverse",
-						 "main",
-						 NULL,
-						 "Generating assembly with %.*s",
-						 (int)asm_drv->name.len,
-						 asm_drv->name.data);
-					ret = print_asm_output(&fs, asm_drv, &asmc_llir);
+					log_info("reverse", "main", NULL, "Step: write ASMC to out/main.s (%.*s)", (int)asm_drv->name.len, asm_drv->name.data);
+					ret = print_asm_output(&fs, asm_drv, &asmc_out);
 				}
 			}
 			if (ret == 0) {
-				ret = asmc_emit_bin(&asmc_llir, &bin_out, &bin);
+				log_info("reverse", "main", NULL, "Step: ASMC -> BIN");
+				ret = asmc_emit_bin(&asmc_out, &bin_out, &bin);
 			}
 			if (ret == 0) {
+				log_info("reverse", "main", NULL, "Step: write BIN to out/main.bin");
 				ret = print_bin_output(&fs, &bin_out);
 			}
 		}
@@ -374,6 +383,9 @@ int main(int argc, const char **argv)
 
 	if (llir_ready) {
 		llir_free(&llir);
+	}
+	if (llir_asmc_ready) {
+		asmc_llir_ctx_free(&asmc_ctx);
 	}
 	if (image_ready && format_drv != NULL && format_drv->free != NULL) {
 		format_drv->free(format_drv, &image);
@@ -391,7 +403,7 @@ int main(int argc, const char **argv)
 		asmc_free(&asmc);
 	}
 	if (asmc_llir_ready) {
-		asmc_free(&asmc_llir);
+		asmc_free(&asmc_out);
 	}
 	fs_free(&fs);
 	mem_free(format_drivers, format_drivers_cnt * sizeof(opt_enum_val_t));

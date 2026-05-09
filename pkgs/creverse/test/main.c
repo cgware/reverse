@@ -13,6 +13,8 @@ STEST(gen_asm_8051);
 STEST(gen_asm_x86);
 STEST(image);
 STEST(llir);
+STEST(llir_asmc);
+STEST(asmc_llir);
 STEST(llir_ssa);
 STEST(parse_8051);
 STEST(parse_x86);
@@ -32,6 +34,8 @@ TEST(creverse)
 	RUN(gen_asm_x86);
 	RUN(image);
 	RUN(llir);
+	RUN(llir_asmc);
+	RUN(asmc_llir);
 	RUN(llir_ssa);
 	RUN(parse_8051);
 	RUN(parse_x86);
