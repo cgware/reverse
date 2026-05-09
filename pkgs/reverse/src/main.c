@@ -8,6 +8,7 @@
 #include "gen_asm.h"
 #include "image.h"
 #include "llir.h"
+#include "llir_expr.h"
 #include "llir_asmc.h"
 #include "asmc_llir.h"
 #include "llir_ssa.h"
@@ -67,6 +68,22 @@ static int print_llir_ssa_file(fs_t *fs, const llir_ssa_t *ssa, strv_t path)
 	}
 
 	llir_ssa_print(ssa, DST_FS(fs, file));
+	fs_close(fs, file);
+	return 0;
+}
+
+static int print_llir_expr_file(fs_t *fs, const llir_expr_t *expr, strv_t path)
+{
+	if (ensure_out_dir(fs)) {
+		return 1;
+	}
+
+	void *file = NULL;
+	if (fs_open(fs, path, "w", &file)) {
+		return 1;
+	}
+
+	llir_expr_print(expr, DST_FS(fs, file));
 	fs_close(fs, file);
 	return 0;
 }
@@ -353,6 +370,20 @@ int main(int argc, const char **argv)
 						if (ret == 0) {
 							log_info("reverse", "main", NULL, "Step: write simplified SSA to out/main.llir_ssa_simplified");
 							ret = print_llir_ssa_file(&fs, &ssa, STRV("out/main.llir_ssa_simplified"));
+						}
+						if (ret == 0) {
+							log_info("reverse", "main", NULL, "Step: SSA -> EXPR");
+							llir_expr_t expr = {0};
+							if (llir_expr_init(&expr, llir_cap, ALLOC_STD) == NULL) {
+								ret = 1;
+							} else {
+								ret = llir_expr_gen(&expr, &ssa);
+								if (ret == 0) {
+									log_info("reverse", "main", NULL, "Step: write expressions to out/main.llir_expr");
+									ret = print_llir_expr_file(&fs, &expr, STRV("out/main.llir_expr"));
+								}
+								llir_expr_free(&expr);
+							}
 						}
 						llir_ssa_free(&ssa);
 					}
