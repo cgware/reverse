@@ -187,6 +187,179 @@ TEST(llir_vars_gen_oom)
 	END;
 }
 
+TEST(llir_vars_cleanup_api_null_safety)
+{
+	START;
+
+	EXPECT_EQ(llir_vars_cleanup(NULL, NULL), 1);
+
+	END;
+}
+
+TEST(llir_vars_cleanup_remove_dead)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_vars_add_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+
+	llir_vars_t vars = {0};
+	EXPECT_NE(llir_vars_init(&vars, 2, ALLOC_STD), NULL);
+	llir_vars_var_t *var = arr_add(&vars.vars, NULL);
+	EXPECT_NE(var, NULL);
+	if (var != NULL) {
+		*var = (llir_vars_var_t){.reg = LLIR_REG_R0, .size = 8, .first_ver = 1, .last_ver = 1};
+	}
+	var = arr_add(&vars.vars, NULL);
+	EXPECT_NE(var, NULL);
+	if (var != NULL) {
+		*var = (llir_vars_var_t){.reg = LLIR_REG_R1, .size = 8, .first_ver = 2, .last_ver = 2};
+	}
+
+	EXPECT_EQ(llir_vars_cleanup(&vars, &expr), 0);
+	EXPECT_EQ(vars.vars.cnt, 1);
+	const llir_vars_var_t *out = arr_get(&vars.vars, 0);
+	EXPECT_NE(out, NULL);
+	if (out != NULL) {
+		EXPECT_EQ(out->reg, LLIR_REG_R0);
+	}
+
+	llir_vars_free(&vars);
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_vars_cleanup_merge_adjacent)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_vars_add_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+
+	llir_vars_t vars = {0};
+	EXPECT_NE(llir_vars_init(&vars, 2, ALLOC_STD), NULL);
+	llir_vars_var_t *var = arr_add(&vars.vars, NULL);
+	EXPECT_NE(var, NULL);
+	if (var != NULL) {
+		*var = (llir_vars_var_t){.reg = LLIR_REG_R0, .size = 8, .first_ver = 1, .last_ver = 1};
+	}
+	var = arr_add(&vars.vars, NULL);
+	EXPECT_NE(var, NULL);
+	if (var != NULL) {
+		*var = (llir_vars_var_t){.reg = LLIR_REG_R0, .size = 16, .first_ver = 2, .last_ver = 4};
+	}
+
+	EXPECT_EQ(llir_vars_cleanup(&vars, &expr), 0);
+	EXPECT_EQ(vars.vars.cnt, 1);
+	const llir_vars_var_t *out = arr_get(&vars.vars, 0);
+	EXPECT_NE(out, NULL);
+	if (out != NULL) {
+		EXPECT_EQ(out->reg, LLIR_REG_R0);
+		EXPECT_EQ(out->size, 16);
+		EXPECT_EQ(out->first_ver, 1);
+		EXPECT_EQ(out->last_ver, 4);
+	}
+
+	llir_vars_free(&vars);
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_vars_cleanup_merge_reversed_range)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_vars_add_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+
+	llir_vars_t vars = {0};
+	EXPECT_NE(llir_vars_init(&vars, 2, ALLOC_STD), NULL);
+	llir_vars_var_t *var = arr_add(&vars.vars, NULL);
+	EXPECT_NE(var, NULL);
+	if (var != NULL) {
+		*var = (llir_vars_var_t){.reg = LLIR_REG_R0, .size = 8, .first_ver = 5, .last_ver = 5};
+	}
+	var = arr_add(&vars.vars, NULL);
+	EXPECT_NE(var, NULL);
+	if (var != NULL) {
+		*var = (llir_vars_var_t){.reg = LLIR_REG_R0, .size = 8, .first_ver = 2, .last_ver = 4};
+	}
+
+	EXPECT_EQ(llir_vars_cleanup(&vars, &expr), 0);
+	EXPECT_EQ(vars.vars.cnt, 1);
+	const llir_vars_var_t *out = arr_get(&vars.vars, 0);
+	EXPECT_NE(out, NULL);
+	if (out != NULL) {
+		EXPECT_EQ(out->first_ver, 2);
+		EXPECT_EQ(out->last_ver, 5);
+	}
+
+	llir_vars_free(&vars);
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_vars_cleanup_compact_gap)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_vars_add_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R1, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+
+	llir_vars_t vars = {0};
+	EXPECT_NE(llir_vars_init(&vars, 2, ALLOC_STD), NULL);
+	llir_vars_var_t *var = arr_add(&vars.vars, NULL);
+	EXPECT_NE(var, NULL);
+	if (var != NULL) {
+		*var = (llir_vars_var_t){.reg = LLIR_REG_R0, .size = 8, .first_ver = 1, .last_ver = 1};
+	}
+	var = arr_add(&vars.vars, NULL);
+	EXPECT_NE(var, NULL);
+	if (var != NULL) {
+		*var = (llir_vars_var_t){.reg = LLIR_REG_R1, .size = 8, .first_ver = 2, .last_ver = 2};
+	}
+
+	EXPECT_EQ(llir_vars_cleanup(&vars, &expr), 0);
+	EXPECT_EQ(vars.vars.cnt, 1);
+	const llir_vars_var_t *out = arr_get(&vars.vars, 0);
+	EXPECT_NE(out, NULL);
+	if (out != NULL) {
+		EXPECT_EQ(out->reg, LLIR_REG_R1);
+	}
+
+	llir_vars_free(&vars);
+	llir_expr_free(&expr);
+
+	END;
+}
+
 TEST(llir_vars_print_exhaustive)
 {
 	START;
@@ -542,6 +715,11 @@ STEST(llir_vars)
 	RUN(llir_vars_api_null_safety);
 	RUN(llir_vars_gen_collects_regs);
 	RUN(llir_vars_gen_oom);
+	RUN(llir_vars_cleanup_api_null_safety);
+	RUN(llir_vars_cleanup_remove_dead);
+	RUN(llir_vars_cleanup_merge_adjacent);
+	RUN(llir_vars_cleanup_merge_reversed_range);
+	RUN(llir_vars_cleanup_compact_gap);
 	RUN(llir_vars_print_exhaustive);
 
 	SEND;

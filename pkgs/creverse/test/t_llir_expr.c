@@ -892,6 +892,777 @@ TEST(llir_expr_recover_control_flow)
 	END;
 }
 
+TEST(llir_expr_cleanup_api_null_safety)
+{
+	START;
+
+	EXPECT_EQ(llir_expr_cleanup(NULL), 1);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_remove_unknown)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){.kind = LLIR_EXPR_STMT_UNKNOWN}), NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_block_t *block = arr_get(&expr.blocks, 0);
+	EXPECT_NE(block, NULL);
+	if (block != NULL) {
+		EXPECT_EQ(block->stmts.cnt, 0);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_phi_single_arg)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint lhs = (uint)(expr.nodes.cnt - 1);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 2,
+				     }),
+		  NULL);
+	uint rhs = (uint)(expr.nodes.cnt - 1);
+
+	llir_expr_stmt_t *stmt = t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+						  .kind = LLIR_EXPR_STMT_PHI,
+						  .lhs  = lhs,
+					  });
+	EXPECT_NE(stmt, NULL);
+	if (stmt != NULL) {
+		EXPECT_NE(arr_init(&stmt->args, 1, sizeof(llir_expr_phi_arg_t), expr.alloc), NULL);
+		llir_expr_phi_arg_t *arg = arr_add(&stmt->args, NULL);
+		EXPECT_NE(arg, NULL);
+		if (arg != NULL) {
+			*arg = (llir_expr_phi_arg_t){.pred = 1, .expr = rhs};
+		}
+	}
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+	stmt = arr_get(&expr.stmts, 0);
+	EXPECT_NE(stmt, NULL);
+	if (stmt != NULL) {
+		EXPECT_EQ(stmt->kind, LLIR_EXPR_STMT_ASSIGN);
+		EXPECT_EQ(stmt->args.cnt, 0);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_if_const_true)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_CONST,
+					     .val  = {.addr = LLIR_ADDR_IMM, .data = 1, .size = 1},
+				     }),
+		  NULL);
+	uint cond = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_IF,
+					 .cond = cond,
+					 .op   = {.dst = {.addr = LLIR_ADDR_IMM, .data = 0x55, .size = 16}},
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_stmt_t *stmt = arr_get(&expr.stmts, 0);
+	EXPECT_NE(stmt, NULL);
+	if (stmt != NULL) {
+		EXPECT_EQ(stmt->kind, LLIR_EXPR_STMT_GOTO);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_if_const_false)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_CONST,
+					     .val  = {.addr = LLIR_ADDR_IMM, .data = 0, .size = 1},
+				     }),
+		  NULL);
+	uint cond = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_IF,
+					 .cond = cond,
+					 .op   = {.dst = {.addr = LLIR_ADDR_IMM, .data = 0x55, .size = 16}},
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_block_t *block = arr_get(&expr.blocks, 0);
+	EXPECT_NE(block, NULL);
+	if (block != NULL) {
+		EXPECT_EQ(block->stmts.cnt, 0);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_self_assign)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint node = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_ASSIGN,
+					 .lhs  = node,
+					 .rhs  = node,
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_block_t *block = arr_get(&expr.blocks, 0);
+	EXPECT_NE(block, NULL);
+	if (block != NULL) {
+		EXPECT_EQ(block->stmts.cnt, 0);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_bin_assign_noop)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint lhs = (uint)(expr.nodes.cnt - 1);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 2,
+				     }),
+		  NULL);
+	uint rhs = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_BIN_ASSIGN,
+					 .op   = {.type = LLIR_OP_RSHIFT},
+					 .lhs  = lhs,
+					 .rhs  = rhs,
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_block_t *block = arr_get(&expr.blocks, 0);
+	EXPECT_NE(block, NULL);
+	if (block != NULL) {
+		EXPECT_EQ(block->stmts.cnt, 0);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_assign_unary_keep)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint base = (uint)(expr.nodes.cnt - 1);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_UNARY,
+					     .op   = LLIR_EXPR_OP_PREDEC,
+					     .lhs  = base,
+				     }),
+		  NULL);
+	uint lhs = (uint)(expr.nodes.cnt - 1);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_UNARY,
+					     .op   = LLIR_EXPR_OP_PREDEC,
+					     .lhs  = base,
+				     }),
+		  NULL);
+	uint rhs = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_ASSIGN,
+					 .lhs  = lhs,
+					 .rhs  = rhs,
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_block_t *block = arr_get(&expr.blocks, 0);
+	EXPECT_NE(block, NULL);
+	if (block != NULL) {
+		EXPECT_EQ(block->stmts.cnt, 1);
+		const uint *stmt_id = arr_get(&block->stmts, 0);
+		EXPECT_NE(stmt_id, NULL);
+		if (stmt_id != NULL) {
+			const llir_expr_stmt_t *stmt = arr_get(&expr.stmts, *stmt_id);
+			EXPECT_NE(stmt, NULL);
+			if (stmt != NULL) {
+				EXPECT_EQ(stmt->kind, LLIR_EXPR_STMT_ASSIGN);
+			}
+		}
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_assign_const_equal)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_CONST,
+					     .val  = {.addr = LLIR_ADDR_IMM, .data = 0x12, .size = 8},
+				     }),
+		  NULL);
+	uint lhs = (uint)(expr.nodes.cnt - 1);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_CONST,
+					     .val  = {.addr = LLIR_ADDR_IMM, .data = 0x12, .size = 8},
+				     }),
+		  NULL);
+	uint rhs = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_ASSIGN,
+					 .lhs  = lhs,
+					 .rhs  = rhs,
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_block_t *block = arr_get(&expr.blocks, 0);
+	EXPECT_NE(block, NULL);
+	if (block != NULL) {
+		EXPECT_EQ(block->stmts.cnt, 0);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_assign_ref_equal)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint lhs = (uint)(expr.nodes.cnt - 1);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint rhs = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_ASSIGN,
+					 .lhs  = lhs,
+					 .rhs  = rhs,
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_block_t *block = arr_get(&expr.blocks, 0);
+	EXPECT_NE(block, NULL);
+	if (block != NULL) {
+		EXPECT_EQ(block->stmts.cnt, 0);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_assign_mismatch)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 3, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_CONST,
+					     .val  = {.addr = LLIR_ADDR_IMM, .data = 0x12, .size = 8},
+				     }),
+		  NULL);
+	uint lhs = (uint)(expr.nodes.cnt - 1);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint rhs = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_ASSIGN,
+					 .lhs  = lhs,
+					 .rhs  = rhs,
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_block_t *block = arr_get(&expr.blocks, 0);
+	EXPECT_NE(block, NULL);
+	if (block != NULL) {
+		EXPECT_EQ(block->stmts.cnt, 1);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_phi_empty)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint lhs = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_PHI,
+					 .lhs  = lhs,
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_block_t *block = arr_get(&expr.blocks, 0);
+	EXPECT_NE(block, NULL);
+	if (block != NULL) {
+		EXPECT_EQ(block->stmts.cnt, 0);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_phi_multi_arg)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 3, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint lhs = (uint)(expr.nodes.cnt - 1);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 2,
+				     }),
+		  NULL);
+	uint rhs1 = (uint)(expr.nodes.cnt - 1);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 3,
+				     }),
+		  NULL);
+	uint rhs2 = (uint)(expr.nodes.cnt - 1);
+
+	llir_expr_stmt_t *stmt = t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+						  .kind = LLIR_EXPR_STMT_PHI,
+						  .lhs  = lhs,
+					  });
+	EXPECT_NE(stmt, NULL);
+	if (stmt != NULL) {
+		EXPECT_NE(arr_init(&stmt->args, 2, sizeof(llir_expr_phi_arg_t), expr.alloc), NULL);
+		llir_expr_phi_arg_t *arg = arr_add(&stmt->args, NULL);
+		EXPECT_NE(arg, NULL);
+		if (arg != NULL) {
+			*arg = (llir_expr_phi_arg_t){.pred = 1, .expr = rhs1};
+		}
+		arg = arr_add(&stmt->args, NULL);
+		EXPECT_NE(arg, NULL);
+		if (arg != NULL) {
+			*arg = (llir_expr_phi_arg_t){.pred = 2, .expr = rhs2};
+		}
+	}
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	stmt = arr_get(&expr.stmts, 0);
+	EXPECT_NE(stmt, NULL);
+	if (stmt != NULL) {
+		EXPECT_EQ(stmt->kind, LLIR_EXPR_STMT_PHI);
+		EXPECT_EQ(stmt->args.cnt, 2);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_bin_assign_const_keep)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint lhs = (uint)(expr.nodes.cnt - 1);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_CONST,
+					     .val  = {.addr = LLIR_ADDR_IMM, .data = 0, .size = 8},
+				     }),
+		  NULL);
+	uint rhs = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_BIN_ASSIGN,
+					 .op   = {.type = LLIR_OP_ADD},
+					 .lhs  = lhs,
+					 .rhs  = rhs,
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_block_t *block = arr_get(&expr.blocks, 0);
+	EXPECT_NE(block, NULL);
+	if (block != NULL) {
+		EXPECT_EQ(block->stmts.cnt, 1);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_if_nonconst_keep)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint cond = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_IF,
+					 .cond = cond,
+					 .op   = {.dst = {.addr = LLIR_ADDR_IMM, .data = 0x55, .size = 16}},
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_stmt_t *stmt = arr_get(&expr.stmts, 0);
+	EXPECT_NE(stmt, NULL);
+	if (stmt != NULL) {
+		EXPECT_EQ(stmt->kind, LLIR_EXPR_STMT_IF);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_goto_keep)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_GOTO,
+					 .op   = {.dst = {.addr = LLIR_ADDR_IMM, .data = 0x55, .size = 16}},
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_stmt_t *stmt = arr_get(&expr.stmts, 0);
+	EXPECT_NE(stmt, NULL);
+	if (stmt != NULL) {
+		EXPECT_EQ(stmt->kind, LLIR_EXPR_STMT_GOTO);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_swap_same)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint node = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_SWAP,
+					 .lhs  = node,
+					 .rhs  = node,
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_block_t *block = arr_get(&expr.blocks, 0);
+	EXPECT_NE(block, NULL);
+	if (block != NULL) {
+		EXPECT_EQ(block->stmts.cnt, 0);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_swap_keep)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 3, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint lhs = (uint)(expr.nodes.cnt - 1);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 2,
+				     }),
+		  NULL);
+	uint rhs = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_SWAP,
+					 .lhs  = lhs,
+					 .rhs  = rhs,
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_block_t *block = arr_get(&expr.blocks, 0);
+	EXPECT_NE(block, NULL);
+	if (block != NULL) {
+		EXPECT_EQ(block->stmts.cnt, 1);
+		const uint *stmt_id = arr_get(&block->stmts, 0);
+		EXPECT_NE(stmt_id, NULL);
+		if (stmt_id != NULL) {
+			const llir_expr_stmt_t *stmt = arr_get(&expr.stmts, *stmt_id);
+			EXPECT_NE(stmt, NULL);
+			if (stmt != NULL) {
+				EXPECT_EQ(stmt->kind, LLIR_EXPR_STMT_SWAP);
+			}
+		}
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_unknown_kind)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = (llir_expr_stmt_kind_t)99,
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_stmt_t *stmt = arr_get(&expr.stmts, 0);
+	EXPECT_NE(stmt, NULL);
+	if (stmt != NULL) {
+		EXPECT_EQ(stmt->kind, (llir_expr_stmt_kind_t)99);
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
+TEST(llir_expr_cleanup_compact_block)
+{
+	START;
+
+	llir_expr_t expr = {0};
+	EXPECT_NE(llir_expr_init(&expr, 3, ALLOC_STD), NULL);
+	EXPECT_NE(t_expr_add_expr_block(&expr, 0), NULL);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_REF,
+					     .val  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+					     .ver  = 1,
+				     }),
+		  NULL);
+	uint node = (uint)(expr.nodes.cnt - 1);
+	EXPECT_NE(t_expr_add_expr_node(&expr, (llir_expr_node_t){
+					     .type = LLIR_EXPR_NODE_CONST,
+					     .val  = {.addr = LLIR_ADDR_IMM, .data = 0x12, .size = 8},
+				     }),
+		  NULL);
+	uint rhs = (uint)(expr.nodes.cnt - 1);
+
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){.kind = LLIR_EXPR_STMT_UNKNOWN}), NULL);
+	EXPECT_NE(t_expr_add_expr_stmt(&expr, (llir_expr_stmt_t){
+					 .kind = LLIR_EXPR_STMT_ASSIGN,
+					 .lhs  = node,
+					 .rhs  = rhs,
+				 }),
+		  NULL);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 0), 0);
+	EXPECT_EQ(t_expr_add_stmt_id(arr_get(&expr.blocks, 0), 1), 0);
+	EXPECT_EQ(llir_expr_cleanup(&expr), 0);
+
+	const llir_expr_block_t *block = arr_get(&expr.blocks, 0);
+	EXPECT_NE(block, NULL);
+	if (block != NULL) {
+		EXPECT_EQ(block->stmts.cnt, 1);
+		const uint *stmt_id = arr_get(&block->stmts, 0);
+		EXPECT_NE(stmt_id, NULL);
+		if (stmt_id != NULL) {
+			const llir_expr_stmt_t *stmt = arr_get(&expr.stmts, *stmt_id);
+			EXPECT_NE(stmt, NULL);
+			if (stmt != NULL) {
+				EXPECT_EQ(stmt->kind, LLIR_EXPR_STMT_ASSIGN);
+			}
+		}
+	}
+
+	llir_expr_free(&expr);
+
+	END;
+}
+
 TEST(llir_expr_print_manual)
 {
 	START;
@@ -1488,6 +2259,26 @@ STEST(llir_expr)
 	RUN(llir_expr_recover_conditions);
 	RUN(llir_expr_recover_values);
 	RUN(llir_expr_recover_control_flow);
+	RUN(llir_expr_cleanup_api_null_safety);
+	RUN(llir_expr_cleanup_remove_unknown);
+	RUN(llir_expr_cleanup_phi_single_arg);
+	RUN(llir_expr_cleanup_if_const_true);
+	RUN(llir_expr_cleanup_if_const_false);
+	RUN(llir_expr_cleanup_self_assign);
+	RUN(llir_expr_cleanup_bin_assign_noop);
+	RUN(llir_expr_cleanup_assign_const_equal);
+	RUN(llir_expr_cleanup_assign_ref_equal);
+	RUN(llir_expr_cleanup_assign_mismatch);
+	RUN(llir_expr_cleanup_assign_unary_keep);
+	RUN(llir_expr_cleanup_phi_empty);
+	RUN(llir_expr_cleanup_phi_multi_arg);
+	RUN(llir_expr_cleanup_bin_assign_const_keep);
+	RUN(llir_expr_cleanup_if_nonconst_keep);
+	RUN(llir_expr_cleanup_goto_keep);
+	RUN(llir_expr_cleanup_swap_same);
+	RUN(llir_expr_cleanup_swap_keep);
+	RUN(llir_expr_cleanup_unknown_kind);
+	RUN(llir_expr_cleanup_compact_block);
 	RUN(llir_expr_print_manual);
 	RUN(llir_expr_print_exhaustive);
 

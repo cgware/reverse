@@ -549,6 +549,140 @@ int llir_expr_gen(llir_expr_t *expr, const llir_ssa_t *ssa)
 	return 0;
 }
 
+static int llir_expr_node_same_value(const llir_expr_t *expr, uint lhs, uint rhs)
+{
+	if (lhs == rhs) {
+		return 1;
+	}
+
+	const llir_expr_node_t *l = arr_get(&expr->nodes, lhs);
+	const llir_expr_node_t *r = arr_get(&expr->nodes, rhs);
+	if (l == NULL || r == NULL || l->type != r->type) {
+		return 0;
+	}
+
+	switch (l->type) {
+	case LLIR_EXPR_NODE_CONST:
+		return l->val.addr == r->val.addr && l->val.data == r->val.data && l->val.size == r->val.size;
+	case LLIR_EXPR_NODE_REF:
+		return l->ver == r->ver && l->val.addr == r->val.addr && l->val.data == r->val.data && l->val.size == r->val.size;
+	default:
+		return 0;
+	}
+}
+
+static int llir_expr_node_same_ref_ign_ver(const llir_expr_t *expr, uint lhs, uint rhs)
+{
+	const llir_expr_node_t *l = arr_get(&expr->nodes, lhs);
+	const llir_expr_node_t *r = arr_get(&expr->nodes, rhs);
+	if (l == NULL || r == NULL || l->type != LLIR_EXPR_NODE_REF || r->type != LLIR_EXPR_NODE_REF) {
+		return 0;
+	}
+
+	return l->val.addr == r->val.addr && l->val.data == r->val.data && l->val.size == r->val.size;
+}
+
+static int llir_expr_cleanup_stmt(llir_expr_t *expr, llir_expr_stmt_t *stmt)
+{
+	if (stmt == NULL) {
+		return 0; // LCOV_EXCL_LINE
+	}
+
+	switch (stmt->kind) {
+	case LLIR_EXPR_STMT_UNKNOWN:
+		return 0;
+	case LLIR_EXPR_STMT_PHI:
+		if (stmt->args.cnt == 0) {
+			llir_expr_stmt_free(stmt);
+			return 0;
+		}
+		if (stmt->args.cnt == 1) {
+			const llir_expr_phi_arg_t *arg = arr_get(&stmt->args, 0);
+			if (arg != NULL) {
+				stmt->kind = LLIR_EXPR_STMT_ASSIGN;
+				stmt->rhs  = arg->expr;
+			}
+			llir_expr_stmt_free(stmt);
+			return 1;
+		}
+		return 1;
+	case LLIR_EXPR_STMT_ASSIGN:
+		if (llir_expr_node_same_value(expr, stmt->lhs, stmt->rhs)) {
+			return 0;
+		}
+		return 1;
+	case LLIR_EXPR_STMT_BIN_ASSIGN: {
+		if (llir_expr_node_same_ref_ign_ver(expr, stmt->lhs, stmt->rhs) &&
+		    (stmt->op.type == LLIR_OP_ADD || stmt->op.type == LLIR_OP_XOR || stmt->op.type == LLIR_OP_OR || stmt->op.type == LLIR_OP_AND ||
+		     stmt->op.type == LLIR_OP_RSHIFT)) {
+			return 0;
+		}
+		return 1;
+	}
+	case LLIR_EXPR_STMT_IF: {
+		const llir_expr_node_t *cond = arr_get(&expr->nodes, stmt->cond);
+		if (cond != NULL && cond->type == LLIR_EXPR_NODE_CONST) {
+			if (cond->val.data == 0) {
+				return 0;
+			}
+			stmt->kind = LLIR_EXPR_STMT_GOTO;
+			stmt->cond = LLIR_EXPR_INVALID_ID;
+			return 1;
+		}
+		return 1;
+	}
+	case LLIR_EXPR_STMT_GOTO:
+	case LLIR_EXPR_STMT_CALL:
+	case LLIR_EXPR_STMT_RET:
+		return 1;
+	case LLIR_EXPR_STMT_SWAP:
+		if (llir_expr_node_same_value(expr, stmt->lhs, stmt->rhs)) {
+			return 0;
+		}
+		return 1;
+	default:
+		return 1;
+	}
+}
+
+int llir_expr_cleanup(llir_expr_t *expr)
+{
+	if (expr == NULL) {
+		return 1;
+	}
+
+	uint i = 0;
+	llir_expr_block_t *block;
+	arr_foreach(&expr->blocks, i, block)
+	{
+		if (block == NULL) {
+			continue; // LCOV_EXCL_LINE
+		}
+
+		uint write = 0;
+		for (uint j = 0; j < block->stmts.cnt; j++) {
+			const uint *stmt_id = arr_get(&block->stmts, j);
+			if (stmt_id == NULL) {
+				continue; // LCOV_EXCL_LINE
+			}
+			llir_expr_stmt_t *stmt = arr_get(&expr->stmts, *stmt_id);
+			if (stmt == NULL) {
+				continue; // LCOV_EXCL_LINE
+			}
+
+			if (llir_expr_cleanup_stmt(expr, stmt)) {
+				if (write != j) {
+					((uint *)block->stmts.data)[write] = *stmt_id;
+				}
+				write++;
+			}
+		}
+		block->stmts.cnt = write;
+	}
+
+	return 0;
+}
+
 static size_t llir_expr_print_imm(llir_val_t val, dst_t dst)
 {
 	size_t off = dst.off;

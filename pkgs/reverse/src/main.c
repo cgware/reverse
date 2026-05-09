@@ -470,6 +470,35 @@ int main(int argc, const char **argv)
 												llir_types_free(&types);
 											}
 										}
+										if (ret == 0) {
+											log_info("reverse", "main", NULL, "Step: cleanup recovered data");
+											ret = llir_expr_cleanup(&expr);
+										}
+										if (ret == 0) {
+											ret = llir_vars_cleanup(&vars, &expr);
+										}
+										if (ret == 0) {
+											log_info("reverse", "main", NULL, "Step: write cleaned expressions to out/main.llir_expr_clean");
+											ret = print_llir_expr_file(&fs, &expr, STRV("out/main.llir_expr_clean"));
+										}
+										if (ret == 0) {
+											log_info("reverse", "main", NULL, "Step: write cleaned variables to out/main.llir_vars_clean");
+											ret = print_llir_vars_file(&fs, &vars, &expr, STRV("out/main.llir_vars_clean"));
+										}
+										if (ret == 0) {
+											log_info("reverse", "main", NULL, "Step: cleanup -> TYPES");
+											llir_types_t types_clean = {0};
+											if (llir_types_init(&types_clean, llir_cap, ALLOC_STD) == NULL) {
+												ret = 1;
+											} else {
+												ret = llir_types_gen(&types_clean, &expr, &vars, &cflow);
+												if (ret == 0) {
+													log_info("reverse", "main", NULL, "Step: write cleaned types to out/main.llir_types_clean");
+													ret = print_llir_types_file(&fs, &types_clean, STRV("out/main.llir_types_clean"));
+												}
+												llir_types_free(&types_clean);
+											}
+										}
 										llir_cflow_free(&cflow);
 									}
 								}

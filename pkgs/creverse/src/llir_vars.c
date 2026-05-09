@@ -119,6 +119,62 @@ int llir_vars_gen(llir_vars_t *vars, const llir_expr_t *expr)
 	return 0;
 }
 
+static int llir_vars_is_used(const llir_expr_t *expr, llir_reg_type_t reg)
+{
+	uint i = 0;
+	const llir_expr_node_t *node;
+	arr_foreach(&expr->nodes, i, node)
+	{
+		if (node != NULL && node->type == LLIR_EXPR_NODE_REF && node->val.addr == LLIR_ADDR_REG && (llir_reg_type_t)node->val.data == reg) {
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+int llir_vars_cleanup(llir_vars_t *vars, const llir_expr_t *expr)
+{
+	if (vars == NULL) {
+		return 1;
+	}
+
+	uint write = 0;
+	for (uint i = 0; i < vars->vars.cnt; i++) {
+		llir_vars_var_t *var = arr_get(&vars->vars, i);
+		if (var == NULL) {
+			continue; // LCOV_EXCL_LINE
+		}
+		if (expr != NULL && !llir_vars_is_used(expr, var->reg)) {
+			continue;
+		}
+
+		if (write > 0) {
+			llir_vars_var_t *prev = arr_get(&vars->vars, write - 1);
+			if (prev != NULL && prev->reg == var->reg) {
+				if (prev->size < var->size) {
+					prev->size = var->size;
+				}
+				if (var->first_ver < prev->first_ver) {
+					prev->first_ver = var->first_ver;
+				}
+				if (var->last_ver > prev->last_ver) {
+					prev->last_ver = var->last_ver;
+				}
+				continue;
+			}
+		}
+
+		if (write != i) {
+			((llir_vars_var_t *)vars->vars.data)[write] = *var;
+		}
+		write++;
+	}
+
+	vars->vars.cnt = write;
+	return 0;
+}
+
 static size_t llir_vars_print_imm(llir_val_t val, dst_t dst)
 {
 	size_t off = dst.off;

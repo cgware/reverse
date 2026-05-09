@@ -78,6 +78,7 @@ llir_expr_t *llir_expr_init(llir_expr_t *expr, uint cap, alloc_t alloc);
 void llir_expr_free(llir_expr_t *expr);
 
 int llir_expr_gen(llir_expr_t *expr, const llir_ssa_t *ssa);
+int llir_expr_cleanup(llir_expr_t *expr);
 
 size_t llir_expr_print(const llir_expr_t *expr, dst_t dst);
 
