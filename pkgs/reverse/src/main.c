@@ -10,6 +10,7 @@
 #include "llir.h"
 #include "llir_expr.h"
 #include "llir_asmc.h"
+#include "llir_cflow.h"
 #include "asmc_llir.h"
 #include "llir_ssa.h"
 #include "llir_vars.h"
@@ -101,6 +102,22 @@ static int print_llir_vars_file(fs_t *fs, const llir_vars_t *vars, const llir_ex
 	}
 
 	llir_vars_print(vars, expr, DST_FS(fs, file));
+	fs_close(fs, file);
+	return 0;
+}
+
+static int print_llir_cflow_file(fs_t *fs, const llir_cflow_t *cflow, const llir_ssa_t *ssa, const llir_expr_t *expr, const llir_vars_t *vars, strv_t path)
+{
+	if (ensure_out_dir(fs)) {
+		return 1;
+	}
+
+	void *file = NULL;
+	if (fs_open(fs, path, "w", &file)) {
+		return 1;
+	}
+
+	llir_cflow_print(cflow, ssa, expr, vars, DST_FS(fs, file));
 	fs_close(fs, file);
 	return 0;
 }
@@ -400,20 +417,34 @@ int main(int argc, const char **argv)
 									ret = print_llir_expr_file(&fs, &expr, STRV("out/main.llir_expr"));
 								}
 							}
-							if (ret == 0) {
-								log_info("reverse", "main", NULL, "Step: EXPR -> VARS");
-								llir_vars_t vars = {0};
-								if (llir_vars_init(&vars, llir_cap, ALLOC_STD) == NULL) {
-									ret = 1;
-								} else {
-									ret = llir_vars_gen(&vars, &expr);
-									if (ret == 0) {
-										log_info("reverse", "main", NULL, "Step: write recovered variables to out/main.llir_vars");
-										ret = print_llir_vars_file(&fs, &vars, &expr, STRV("out/main.llir_vars"));
-									}
-									llir_vars_free(&vars);
+						if (ret == 0) {
+							log_info("reverse", "main", NULL, "Step: EXPR -> VARS");
+							llir_vars_t vars = {0};
+							if (llir_vars_init(&vars, llir_cap, ALLOC_STD) == NULL) {
+								ret = 1;
+							} else {
+								ret = llir_vars_gen(&vars, &expr);
+								if (ret == 0) {
+									log_info("reverse", "main", NULL, "Step: write recovered variables to out/main.llir_vars");
+									ret = print_llir_vars_file(&fs, &vars, &expr, STRV("out/main.llir_vars"));
 								}
+								if (ret == 0) {
+									log_info("reverse", "main", NULL, "Step: EXPR -> CFLOW");
+									llir_cflow_t cflow = {0};
+									if (llir_cflow_init(&cflow, llir_cap, ALLOC_STD) == NULL) {
+										ret = 1;
+									} else {
+										ret = llir_cflow_gen(&cflow, &ssa, &expr);
+										if (ret == 0) {
+											log_info("reverse", "main", NULL, "Step: write structured control flow to out/main.llir_cflow");
+											ret = print_llir_cflow_file(&fs, &cflow, &ssa, &expr, &vars, STRV("out/main.llir_cflow"));
+										}
+										llir_cflow_free(&cflow);
+									}
+								}
+								llir_vars_free(&vars);
 							}
+						}
 							llir_expr_free(&expr);
 						}
 						llir_ssa_free(&ssa);
