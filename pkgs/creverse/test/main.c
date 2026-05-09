@@ -15,6 +15,7 @@ STEST(image);
 STEST(llir);
 STEST(llir_expr);
 STEST(llir_asmc);
+STEST(llir_c);
 STEST(llir_cflow);
 STEST(asmc_llir);
 STEST(llir_types);
@@ -40,6 +41,7 @@ TEST(creverse)
 	RUN(llir);
 	RUN(llir_expr);
 	RUN(llir_asmc);
+	RUN(llir_c);
 	RUN(llir_cflow);
 	RUN(asmc_llir);
 	RUN(llir_types);
