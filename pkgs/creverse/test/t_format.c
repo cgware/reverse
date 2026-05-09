@@ -179,6 +179,39 @@ TEST(format_emit_image_sections)
 	END;
 }
 
+TEST(format_emit_bin)
+{
+	START;
+
+	EXPECT_EQ(format_emit_bin(NULL, NULL, NULL, NULL), 1);
+
+	asmc_t asmc = {0};
+	EXPECT_EQ(asmc_init(&asmc, 4, ALLOC_STD), &asmc);
+	asmc_op_t *op = asmc_add_op(&asmc, 1, ASMC_OP_BYTE);
+	EXPECT_NE(op, NULL);
+	if (op != NULL) {
+		op->dst = (asmc_oper_t){.addr = ASMC_ADDR_IMM, .size = 8, .val = 0xAA};
+	}
+
+	bin_t base = {0};
+	EXPECT_NE(bin_init(&base, 3, ALLOC_STD), NULL);
+	EXPECT_EQ(t_drivers_bin_from_bytes(&base, (byte[]){0x11, 0x22, 0x33}, 3), 0);
+
+	bin_t out = {0};
+	EXPECT_NE(bin_init(&out, 1, ALLOC_STD), NULL);
+	EXPECT_EQ(format_emit_bin(format_driver_find(STRV("bin")), &asmc, &out, &base), 0);
+	EXPECT_EQ(out.buf.used, 3);
+	EXPECT_EQ(((byte *)out.buf.data)[0], 0x11);
+	EXPECT_EQ(((byte *)out.buf.data)[1], 0xAA);
+	EXPECT_EQ(((byte *)out.buf.data)[2], 0x33);
+
+	bin_free(&out);
+	bin_free(&base);
+	asmc_free(&asmc);
+
+	END;
+}
+
 STEST(format)
 {
 	SSTART;
@@ -187,6 +220,7 @@ STEST(format)
 	RUN(format_detect);
 	RUN(format_print);
 	RUN(format_emit_image_sections);
+	RUN(format_emit_bin);
 
 	SEND;
 }

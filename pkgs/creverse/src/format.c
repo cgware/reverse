@@ -1,5 +1,6 @@
 #include "format.h"
 
+#include "asmc_bin.h"
 #include "strv.h"
 
 static int format_asmc_op_has_str(asmc_op_type_t type)
@@ -98,4 +99,11 @@ int format_emit_image_sections(reverse_image_t *image, asmc_t *asmc)
 	}
 
 	return 0;
+}
+
+int format_emit_bin(const format_driver_t *drv, const asmc_t *asmc, bin_t *bin, const bin_t *base)
+{
+	(void)drv;
+
+	return asmc_emit_bin(asmc, bin, base);
 }

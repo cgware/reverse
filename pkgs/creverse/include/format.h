@@ -31,5 +31,6 @@ format_driver_t *format_driver_find(strv_t name);
 format_driver_t *format_driver_detect(const bin_t *bin);
 size_t format_drivers_print(dst_t dst);
 int format_emit_image_sections(reverse_image_t *image, asmc_t *asmc);
+int format_emit_bin(const format_driver_t *drv, const asmc_t *asmc, bin_t *bin, const bin_t *base);
 
 #endif

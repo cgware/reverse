@@ -371,10 +371,11 @@ int main(int argc, const char **argv)
 				}
 			}
 			if (ret == 0) {
-				log_info("reverse", "main", NULL, "Step: ASMC -> BIN");
-				ret = asmc_emit_bin(&asmc_out, &bin_out, &bin);
+				log_info("reverse", "main", NULL, "Step: ASMC -> FORMAT (%.*s)", (int)format_drv->name.len, format_drv->name.data);
+				ret = format_emit_bin(format_drv, &asmc_out, &bin_out, &bin);
 			}
 			if (ret == 0) {
+				log_info("reverse", "main", NULL, "Step: FORMAT -> BIN (%.*s)", (int)format_drv->name.len, format_drv->name.data);
 				log_info("reverse", "main", NULL, "Step: write BIN to out/main.bin");
 				ret = print_bin_output(&fs, &bin_out);
 			}
