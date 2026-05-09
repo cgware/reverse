@@ -10,6 +10,7 @@
 #include "llir.h"
 #include "llir_expr.h"
 #include "llir_asmc.h"
+#include "llir_c_ast.h"
 #include "llir_c.h"
 #include "llir_cflow.h"
 #include "asmc_llir.h"
@@ -140,8 +141,7 @@ static int print_llir_types_file(fs_t *fs, const llir_types_t *types, strv_t pat
 	return 0;
 }
 
-static int print_llir_c_file(fs_t *fs, const llir_cflow_t *cflow, const llir_ssa_t *ssa, const llir_expr_t *expr, const llir_vars_t *vars,
-			     const llir_types_t *types, strv_t path)
+static int print_llir_c_ast_file(fs_t *fs, const llir_c_ast_t *ast, strv_t path)
 {
 	if (ensure_out_dir(fs)) {
 		return 1;
@@ -152,7 +152,7 @@ static int print_llir_c_file(fs_t *fs, const llir_cflow_t *cflow, const llir_ssa
 		return 1;
 	}
 
-	llir_c_print(cflow, ssa, expr, vars, types, DST_FS(fs, file));
+	llir_c_ast_emit(ast, DST_FS(fs, file));
 	fs_close(fs, file);
 	return 0;
 }
@@ -515,8 +515,18 @@ int main(int argc, const char **argv)
 													ret = print_llir_types_file(&fs, &types_clean, STRV("out/main.llir_types_clean"));
 												}
 												if (ret == 0) {
-													log_info("reverse", "main", NULL, "Step: C pretty print -> out/main.c");
-													ret = print_llir_c_file(&fs, &cflow, &ssa, &expr, &vars, &types_clean, STRV("out/main.c"));
+													log_info("reverse", "main", NULL, "Step: LLIR -> C AST");
+													llir_c_ast_t c_ast = {0};
+													if (llir_c_ast_init(&c_ast) == NULL) {
+														ret = 1;
+													} else {
+														ret = llir_c_ast_gen(&c_ast, &cflow, &ssa, &expr, &vars, &types_clean);
+														if (ret == 0) {
+															log_info("reverse", "main", NULL, "Step: C AST -> C");
+															ret = print_llir_c_ast_file(&fs, &c_ast, STRV("out/main.c"));
+														}
+														llir_c_ast_free(&c_ast);
+													}
 												}
 												llir_types_free(&types_clean);
 											}
