@@ -1081,6 +1081,133 @@ end:
 	return ret;
 }
 
+static u64 llir_ssa_mask_for_size(u8 size)
+{
+	switch (size) {
+	case 8: return 0xFF;
+	case 16: return 0xFFFF;
+	case 32: return 0xFFFFFFFFULL;
+	case 64: return ~0ULL;
+	default: return 0;
+	}
+}
+
+static void llir_ssa_make_copy(llir_ssa_inst_t *inst)
+{
+	inst->op.type	 = LLIR_OP_SET;
+	inst->op.src	 = inst->op.dst;
+	inst->op.src_sub = inst->op.dst_sub;
+	inst->src_ver	 = inst->dst_ver;
+	inst->src_out_ver = 0;
+}
+
+static void llir_ssa_make_const(llir_ssa_inst_t *inst, u64 value)
+{
+	u8 size = inst->op.dst.size != 0 ? inst->op.dst.size : inst->op.src.size;
+
+	inst->op.type	 = LLIR_OP_SET;
+	inst->op.src	 = (llir_val_t){.addr = LLIR_ADDR_IMM, .data = value, .size = size};
+	inst->op.src_sub = inst->op.src;
+	inst->src_ver	 = 0;
+	inst->src_out_ver = 0;
+}
+
+static void llir_ssa_fold_binary(llir_ssa_inst_t *inst, u64 lhs, u64 rhs)
+{
+	u64 mask = llir_ssa_mask_for_size(inst->op.dst.size != 0 ? inst->op.dst.size : inst->op.src.size);
+	u64 out  = 0;
+
+	switch (inst->op.type) {
+	case LLIR_OP_ADD: out = lhs + rhs; break;
+	case LLIR_OP_XOR: out = lhs ^ rhs; break;
+	case LLIR_OP_OR: out = lhs | rhs; break;
+	case LLIR_OP_AND: out = lhs & rhs; break;
+	case LLIR_OP_RSHIFT: out = lhs >> (rhs & 63); break;
+	default: return; // LCOV_EXCL_LINE
+	}
+
+	if (mask != 0) {
+		out &= mask;
+	}
+
+	llir_ssa_make_const(inst, out);
+}
+
+static int llir_ssa_simplify_inst(llir_ssa_inst_t *inst)
+{
+	if (inst == NULL) {
+		return 1; // LCOV_EXCL_LINE
+	}
+
+	llir_op_t *op = &inst->op;
+
+	switch (op->type) {
+	case LLIR_OP_ADD:
+	case LLIR_OP_XOR:
+	case LLIR_OP_OR:
+	case LLIR_OP_AND:
+	case LLIR_OP_RSHIFT: {
+		if (op->dst.addr == LLIR_ADDR_IMM && op->src.addr == LLIR_ADDR_IMM) {
+			llir_ssa_fold_binary(inst, op->dst.data, op->src.data);
+			break;
+		}
+
+		if (op->dst.addr != LLIR_ADDR_REG) {
+			break;
+		}
+
+		if (op->src.addr == LLIR_ADDR_IMM) {
+			if (op->src.data == 0) {
+				llir_ssa_make_copy(inst);
+				break;
+			}
+
+			if (op->type == LLIR_OP_AND) {
+				u64 mask = llir_ssa_mask_for_size(op->src.size != 0 ? op->src.size : op->dst.size);
+				if (mask != 0 && op->src.data == mask) {
+					llir_ssa_make_copy(inst);
+					break;
+				}
+			}
+			break;
+		}
+
+		if (op->dst.addr == LLIR_ADDR_REG && op->src.addr == LLIR_ADDR_REG && op->dst.data == op->src.data &&
+		    inst->dst_ver == inst->src_ver) {
+			if (op->type == LLIR_OP_XOR) {
+				llir_ssa_make_const(inst, 0);
+			} else if (op->type == LLIR_OP_OR || op->type == LLIR_OP_AND) {
+				llir_ssa_make_copy(inst);
+			}
+		}
+		break;
+	}
+	default: {
+		break;
+	}
+	}
+
+	return 0;
+}
+
+int llir_ssa_simplify(llir_ssa_t *ssa)
+{
+	if (ssa == NULL) {
+		return 1;
+	}
+
+	uint i = 0;
+	llir_ssa_inst_t *inst;
+	arr_foreach(&ssa->ops, i, inst)
+	{
+		if (llir_ssa_simplify_inst(inst)) {
+			return 1; // LCOV_EXCL_LINE
+		}
+	}
+
+	return 0;
+}
+
 static size_t llir_ssa_print_imm(llir_val_t val, dst_t dst)
 {
 	size_t off = dst.off;

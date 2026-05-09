@@ -45,6 +45,7 @@ llir_ssa_t *llir_ssa_init(llir_ssa_t *ssa, alloc_t alloc);
 void llir_ssa_free(llir_ssa_t *ssa);
 
 int llir_ssa_gen(llir_ssa_t *ssa, const llir_t *llir);
+int llir_ssa_simplify(llir_ssa_t *ssa);
 
 size_t llir_ssa_print(const llir_ssa_t *ssa, dst_t dst);
 

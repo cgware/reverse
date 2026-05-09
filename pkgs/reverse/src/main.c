@@ -55,14 +55,14 @@ static int print_llir_output(fs_t *fs, const llir_t *llir)
 	return 0;
 }
 
-static int print_llir_ssa_output(fs_t *fs, const llir_ssa_t *ssa)
+static int print_llir_ssa_file(fs_t *fs, const llir_ssa_t *ssa, strv_t path)
 {
 	if (ensure_out_dir(fs)) {
 		return 1;
 	}
 
 	void *file = NULL;
-	if (fs_open(fs, STRV("out/main.llir_ssa"), "w", &file)) {
+	if (fs_open(fs, path, "w", &file)) {
 		return 1;
 	}
 
@@ -344,7 +344,15 @@ int main(int argc, const char **argv)
 						ret = llir_ssa_gen(&ssa, &llir);
 						if (ret == 0) {
 							log_info("reverse", "main", NULL, "Step: write SSA to out/main.llir_ssa");
-							ret = print_llir_ssa_output(&fs, &ssa);
+							ret = print_llir_ssa_file(&fs, &ssa, STRV("out/main.llir_ssa"));
+						}
+						if (ret == 0) {
+							log_info("reverse", "main", NULL, "Step: simplify SSA");
+							ret = llir_ssa_simplify(&ssa);
+						}
+						if (ret == 0) {
+							log_info("reverse", "main", NULL, "Step: write simplified SSA to out/main.llir_ssa_simplified");
+							ret = print_llir_ssa_file(&fs, &ssa, STRV("out/main.llir_ssa_simplified"));
 						}
 						llir_ssa_free(&ssa);
 					}

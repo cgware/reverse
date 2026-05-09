@@ -319,6 +319,401 @@ TEST(llir_ssa_api_null_safety)
 	END;
 }
 
+TEST(llir_ssa_simplify_null)
+{
+	START;
+
+	EXPECT_NE(llir_ssa_simplify(NULL), 0);
+
+	END;
+}
+
+TEST(llir_ssa_simplify_identity_ops)
+{
+	START;
+
+	llir_ssa_t ssa = {0};
+	EXPECT_EQ(llir_ssa_init(&ssa, ALLOC_STD), &ssa);
+
+	llir_ssa_inst_t *inst = t_ir_ssa_add_inst(&ssa,
+						 (llir_op_t){.addr = 0,
+							     .type = LLIR_OP_ADD,
+							     .dst  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+							     .src  = {.addr = LLIR_ADDR_IMM, .data = 0, .size = 8}});
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		inst->dst_ver = 1;
+	}
+
+	inst = t_ir_ssa_add_inst(&ssa,
+				(llir_op_t){.addr = 1,
+					  .type = LLIR_OP_OR,
+					  .dst  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R1, .size = 8},
+					  .src  = {.addr = LLIR_ADDR_IMM, .data = 0, .size = 8}});
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		inst->dst_ver = 2;
+	}
+
+	inst = t_ir_ssa_add_inst(&ssa,
+				(llir_op_t){.addr = 2,
+					  .type = LLIR_OP_AND,
+					  .dst  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R2, .size = 8},
+					  .src  = {.addr = LLIR_ADDR_IMM, .data = 0xFF, .size = 8}});
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		inst->dst_ver = 3;
+	}
+
+	inst = t_ir_ssa_add_inst(&ssa,
+				(llir_op_t){.addr = 3,
+					  .type = LLIR_OP_RSHIFT,
+					  .dst  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R3, .size = 8},
+					  .src  = {.addr = LLIR_ADDR_IMM, .data = 0, .size = 8}});
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		inst->dst_ver = 4;
+	}
+
+	EXPECT_EQ(llir_ssa_simplify(&ssa), 0);
+
+	inst = arr_get(&ssa.ops, 0);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_SET);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_REG);
+		EXPECT_EQ(inst->op.src.data, LLIR_REG_R0);
+		EXPECT_EQ(inst->src_ver, inst->dst_ver);
+	}
+
+	inst = arr_get(&ssa.ops, 1);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_SET);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_REG);
+		EXPECT_EQ(inst->op.src.data, LLIR_REG_R1);
+		EXPECT_EQ(inst->src_ver, inst->dst_ver);
+	}
+
+	inst = arr_get(&ssa.ops, 2);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_SET);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_REG);
+		EXPECT_EQ(inst->op.src.data, LLIR_REG_R2);
+		EXPECT_EQ(inst->src_ver, inst->dst_ver);
+	}
+
+	inst = arr_get(&ssa.ops, 3);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_SET);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_REG);
+		EXPECT_EQ(inst->op.src.data, LLIR_REG_R3);
+		EXPECT_EQ(inst->src_ver, inst->dst_ver);
+	}
+
+	llir_ssa_free(&ssa);
+
+	END;
+}
+
+TEST(llir_ssa_simplify_xor_rules)
+{
+	START;
+
+	llir_ssa_t ssa = {0};
+	EXPECT_EQ(llir_ssa_init(&ssa, ALLOC_STD), &ssa);
+
+	llir_ssa_inst_t *inst = t_ir_ssa_add_inst(&ssa,
+						 (llir_op_t){.addr = 0,
+							     .type = LLIR_OP_XOR,
+							     .dst  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+							     .src  = {.addr = LLIR_ADDR_IMM, .data = 0, .size = 8}});
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		inst->dst_ver = 1;
+	}
+
+	inst = t_ir_ssa_add_inst(&ssa,
+				(llir_op_t){.addr = 1,
+					  .type = LLIR_OP_XOR,
+					  .dst  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R1, .size = 8},
+					  .src  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R1, .size = 8}});
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		inst->dst_ver = 2;
+		inst->src_ver = 2;
+	}
+
+	EXPECT_EQ(llir_ssa_simplify(&ssa), 0);
+
+	inst = arr_get(&ssa.ops, 0);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_SET);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_REG);
+		EXPECT_EQ(inst->op.src.data, LLIR_REG_R0);
+		EXPECT_EQ(inst->src_ver, inst->dst_ver);
+	}
+
+	inst = arr_get(&ssa.ops, 1);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_SET);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_IMM);
+		EXPECT_EQ(inst->op.src.data, 0);
+		EXPECT_EQ(inst->src_ver, 0);
+	}
+
+	llir_ssa_free(&ssa);
+
+	END;
+}
+
+TEST(llir_ssa_simplify_const_fold)
+{
+	START;
+
+	llir_ssa_t ssa = {0};
+	EXPECT_EQ(llir_ssa_init(&ssa, ALLOC_STD), &ssa);
+
+	llir_ssa_inst_t *inst = t_ir_ssa_add_inst(&ssa,
+						 (llir_op_t){.addr = 0,
+							     .type = LLIR_OP_ADD,
+							     .dst  = {.addr = LLIR_ADDR_IMM, .data = 1, .size = 8},
+							     .src  = {.addr = LLIR_ADDR_IMM, .data = 2, .size = 8}});
+	EXPECT_NE(inst, NULL);
+
+	inst = t_ir_ssa_add_inst(&ssa,
+				(llir_op_t){.addr = 1,
+					  .type = LLIR_OP_XOR,
+					  .dst  = {.addr = LLIR_ADDR_IMM, .data = 0x1234, .size = 16},
+					  .src  = {.addr = LLIR_ADDR_IMM, .data = 0x00FF, .size = 16}});
+	EXPECT_NE(inst, NULL);
+
+	inst = t_ir_ssa_add_inst(&ssa,
+				(llir_op_t){.addr = 2,
+					  .type = LLIR_OP_OR,
+					  .dst  = {.addr = LLIR_ADDR_IMM, .data = 0x12345678, .size = 32},
+					  .src  = {.addr = LLIR_ADDR_IMM, .data = 0x0000000F, .size = 32}});
+	EXPECT_NE(inst, NULL);
+
+	inst = t_ir_ssa_add_inst(&ssa,
+				(llir_op_t){.addr = 3,
+					  .type = LLIR_OP_AND,
+					  .dst  = {.addr = LLIR_ADDR_IMM, .data = 0x123456789ABCDEF0ULL, .size = 64},
+					  .src  = {.addr = LLIR_ADDR_IMM, .data = 0x0F0F0F0F0F0F0F0FULL, .size = 64}});
+	EXPECT_NE(inst, NULL);
+
+	inst = t_ir_ssa_add_inst(&ssa,
+				(llir_op_t){.addr = 4,
+					  .type = LLIR_OP_RSHIFT,
+					  .dst  = {.addr = LLIR_ADDR_IMM, .data = 0x80, .size = 8},
+					  .src  = {.addr = LLIR_ADDR_IMM, .data = 1, .size = 8}});
+	EXPECT_NE(inst, NULL);
+
+	EXPECT_EQ(llir_ssa_simplify(&ssa), 0);
+
+	inst = arr_get(&ssa.ops, 0);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_SET);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_IMM);
+		EXPECT_EQ(inst->op.src.data, 3);
+	}
+
+	inst = arr_get(&ssa.ops, 1);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_SET);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_IMM);
+		EXPECT_EQ(inst->op.src.data, 0x12CB);
+	}
+
+	inst = arr_get(&ssa.ops, 2);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_SET);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_IMM);
+		EXPECT_EQ(inst->op.src.data, 0x1234567F);
+	}
+
+	inst = arr_get(&ssa.ops, 3);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_SET);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_IMM);
+		EXPECT_EQ(inst->op.src.data, 0x020406080A0C0E00ULL);
+	}
+
+	inst = arr_get(&ssa.ops, 4);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_SET);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_IMM);
+		EXPECT_EQ(inst->op.src.data, 0x40);
+	}
+
+	llir_ssa_free(&ssa);
+
+	END;
+}
+
+TEST(llir_ssa_simplify_const_fold_size0)
+{
+	START;
+
+	llir_ssa_t ssa = {0};
+	EXPECT_EQ(llir_ssa_init(&ssa, ALLOC_STD), &ssa);
+
+	llir_ssa_inst_t *inst = t_ir_ssa_add_inst(&ssa,
+						 (llir_op_t){.addr = 0,
+							     .type = LLIR_OP_ADD,
+							     .dst  = {.addr = LLIR_ADDR_IMM, .data = 1, .size = 0},
+							     .src  = {.addr = LLIR_ADDR_IMM, .data = 2, .size = 0}});
+	EXPECT_NE(inst, NULL);
+
+	EXPECT_EQ(llir_ssa_simplify(&ssa), 0);
+
+	inst = arr_get(&ssa.ops, 0);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_SET);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_IMM);
+		EXPECT_EQ(inst->op.src.data, 3);
+		EXPECT_EQ(inst->op.src.size, 0);
+	}
+
+	llir_ssa_free(&ssa);
+
+	END;
+}
+
+TEST(llir_ssa_simplify_nonreg_dst)
+{
+	START;
+
+	llir_ssa_t ssa = {0};
+	EXPECT_EQ(llir_ssa_init(&ssa, ALLOC_STD), &ssa);
+
+	llir_ssa_inst_t *inst = t_ir_ssa_add_inst(&ssa,
+						 (llir_op_t){.addr = 0,
+							     .type = LLIR_OP_ADD,
+							     .dst  = {.addr = LLIR_ADDR_IMM, .data = 7, .size = 8},
+							     .src  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R2, .size = 8}});
+	EXPECT_NE(inst, NULL);
+
+	EXPECT_EQ(llir_ssa_simplify(&ssa), 0);
+
+	inst = arr_get(&ssa.ops, 0);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_ADD);
+		EXPECT_EQ(inst->op.dst.addr, LLIR_ADDR_IMM);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_REG);
+	}
+
+	llir_ssa_free(&ssa);
+
+	END;
+}
+
+TEST(llir_ssa_simplify_add_nonzero_imm)
+{
+	START;
+
+	llir_ssa_t ssa = {0};
+	EXPECT_EQ(llir_ssa_init(&ssa, ALLOC_STD), &ssa);
+
+	llir_ssa_inst_t *inst = t_ir_ssa_add_inst(&ssa,
+						 (llir_op_t){.addr = 0,
+							     .type = LLIR_OP_ADD,
+							     .dst  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R0, .size = 8},
+							     .src  = {.addr = LLIR_ADDR_IMM, .data = 1, .size = 8}});
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		inst->dst_ver = 1;
+	}
+
+	EXPECT_EQ(llir_ssa_simplify(&ssa), 0);
+
+	inst = arr_get(&ssa.ops, 0);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_ADD);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_IMM);
+		EXPECT_EQ(inst->op.src.data, 1);
+	}
+
+	llir_ssa_free(&ssa);
+
+	END;
+}
+
+TEST(llir_ssa_simplify_or_same_reg)
+{
+	START;
+
+	llir_ssa_t ssa = {0};
+	EXPECT_EQ(llir_ssa_init(&ssa, ALLOC_STD), &ssa);
+
+	llir_ssa_inst_t *inst = t_ir_ssa_add_inst(&ssa,
+						 (llir_op_t){.addr = 0,
+							     .type = LLIR_OP_OR,
+							     .dst  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R1, .size = 8},
+							     .src  = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_R1, .size = 8}});
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		inst->dst_ver = 2;
+		inst->src_ver = 2;
+	}
+
+	EXPECT_EQ(llir_ssa_simplify(&ssa), 0);
+
+	inst = arr_get(&ssa.ops, 0);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, LLIR_OP_SET);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_REG);
+		EXPECT_EQ(inst->op.src.data, LLIR_REG_R1);
+		EXPECT_EQ(inst->src_ver, inst->dst_ver);
+	}
+
+	llir_ssa_free(&ssa);
+
+	END;
+}
+
+TEST(llir_ssa_simplify_unknown)
+{
+	START;
+
+	llir_ssa_t ssa = {0};
+	EXPECT_EQ(llir_ssa_init(&ssa, ALLOC_STD), &ssa);
+
+	llir_ssa_inst_t *inst = t_ir_ssa_add_inst(&ssa,
+						 (llir_op_t){.addr = 0,
+							     .type = (llir_op_type_t)99,
+							     .dst  = {.addr = LLIR_ADDR_UNKNOWN, .data = 0, .size = 0},
+							     .src  = {.addr = LLIR_ADDR_UNKNOWN, .data = 0, .size = 0}});
+	EXPECT_NE(inst, NULL);
+
+	EXPECT_EQ(llir_ssa_simplify(&ssa), 0);
+
+	inst = arr_get(&ssa.ops, 0);
+	EXPECT_NE(inst, NULL);
+	if (inst != NULL) {
+		EXPECT_EQ(inst->op.type, (llir_op_type_t)99);
+		EXPECT_EQ(inst->op.dst.addr, LLIR_ADDR_UNKNOWN);
+		EXPECT_EQ(inst->op.src.addr, LLIR_ADDR_UNKNOWN);
+	}
+
+	llir_ssa_free(&ssa);
+
+	END;
+}
+
 static int t_ir_ssa_build_dup_edge_ir(llir_t *llir)
 {
 	llir_op_t *op = t_ir_ssa_add(llir, 0, LLIR_OP_IF);
@@ -877,6 +1272,15 @@ STEST(llir_ssa)
 	SSTART;
 
 	RUN(llir_ssa_api_null_safety);
+	RUN(llir_ssa_simplify_null);
+	RUN(llir_ssa_simplify_identity_ops);
+	RUN(llir_ssa_simplify_xor_rules);
+	RUN(llir_ssa_simplify_const_fold);
+	RUN(llir_ssa_simplify_const_fold_size0);
+	RUN(llir_ssa_simplify_nonreg_dst);
+	RUN(llir_ssa_simplify_add_nonzero_imm);
+	RUN(llir_ssa_simplify_or_same_reg);
+	RUN(llir_ssa_simplify_unknown);
 	RUN(llir_ssa_gen_empty_ir);
 	RUN(llir_ssa_gen_null_ir);
 	RUN(llir_ssa_gen_cfg_flow);
