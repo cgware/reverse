@@ -371,6 +371,14 @@ static size_t asmc_print_pseudo_ternary(const char *name, const asmc_op_t *op, d
 	return dst.off - off;
 }
 
+static size_t asmc_print_op_prefix(const asmc_op_t *op, dst_t dst)
+{
+	size_t off = dst.off;
+
+	dst.off += dputf(dst, "0x%04X: ", op->addr);
+	return dst.off - off;
+}
+
 size_t asmc_print(const asmc_t *asmc, dst_t dst)
 {
 	if (asmc == NULL) {
@@ -383,6 +391,7 @@ size_t asmc_print(const asmc_t *asmc, dst_t dst)
 	asmc_op_t *op;
 	arr_foreach(&asmc->ops, i, op)
 	{
+		dst.off += asmc_print_op_prefix(op, dst);
 		switch (op->type) {
 		case ASMC_OP_SECTION: {
 			strv_t str = strvbuf_get(&asmc->strs, op->str);

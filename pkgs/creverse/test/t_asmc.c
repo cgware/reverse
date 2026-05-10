@@ -2,12 +2,32 @@
 
 #include "log.h"
 #include "mem.h"
+#include "strv.h"
 #include "test.h"
 
 extern size_t asmc_test_dump_imm(const asmc_oper_t *oper, int rel, dst_t dst);
 extern size_t asmc_test_dump_oper(const asmc_oper_t *oper, dst_t dst);
 extern const char *asmc_test_print_op_name(asmc_op_type_t type);
 extern int asmc_test_print_has_oper(const asmc_oper_t *oper);
+
+static int t_asmc_str_contains(strv_t haystack, strv_t needle)
+{
+	if (needle.len == 0) {
+		return 1;
+	}
+
+	if (haystack.len < needle.len) {
+		return 0;
+	}
+
+	for (size_t i = 0; i + needle.len <= haystack.len; i++) {
+		if (strv_eq(STRVN(&haystack.data[i], needle.len), needle)) {
+			return 1;
+		}
+	}
+
+	return 0;
+}
 
 TEST(asmc_init_free)
 {
@@ -77,11 +97,11 @@ TEST(asmc_print_pseudo)
 	char buf[256] = {0};
 	EXPECT_GT(asmc_print(&asmc, DST_BUF(buf)), 0);
 	EXPECT_STR(buf,
-		   ".section .text\n"
-		   "main:\n"
-		   "MOV A, 0x42\n"
-		   "ADD A, R1\n"
-		   "RET\n");
+		   "0x0010: .section .text\n"
+		   "0x0000: main:\n"
+		   "0x0000: MOV A, 0x42\n"
+		   "0x0000: ADD A, R1\n"
+		   "0x0000: RET\n");
 
 	asmc_free(&asmc);
 
@@ -353,57 +373,57 @@ TEST(asmc_coverage)
 	log_set_quiet(0, 1);
 	EXPECT_GT(asmc_print(&print, DST_BUF(out)), 0);
 	log_set_quiet(0, 0);
-	EXPECT_STR(out,
-		   ".section .text\n"
-		   ".global global_name\n"
-		   "label_name:\n"
-		   ".byte 0x12\n"
-		   ".word 0x1234\n"
-		   ".long 0x12345678\n"
-		   ".quad 0x000000009abcdef0\n"
-		   ".string \"string_name\"\n"
-		   ".rept 3\n"
-		   ".endr\n"
-		   "NOP(7)\n"
-		   "SYSCALL\n"
-		   "ENDBR64\n"
-		   "RET\n"
-		   "HLT\n"
-		   "DIV_AB\n"
-		   "SETB_C\n"
-		   "RETI\n"
-		   "DEC A\n"
-		   "RL A\n"
-		   "RLC A\n"
-		   "JC +0x04\n"
-		   "JB +0x05\n"
-		   "JNB +0x06\n"
-		   "JBC +0x07\n"
-		   "MOVC A, [CODE:A+DPTR]\n"
-		   "MUL_AB\n"
-		   "CPL A\n"
-		   "SETB [BIT:0x44]\n"
-		   "DA A\n"
-		   "XCHD A, [IRAM:R0]\n"
-		   "PUSH RAX\n"
-		   "POP R9\n"
-		   "JE +0x04\n"
-		   "JNE -0x04\n"
-		   "JZ +0x05\n"
-		   "JNZ +0x06\n"
-		   "JNC +0x07\n"
-		   "CALL +0x08\n"
-		   "JMP +0x09\n"
-		   "CLR RCX\n"
-		   "SWAP RDX\n"
-		   "INC RSP\n"
-		   "RRC RBP\n"
-		   "RR RSI\n"
-		   "ADD RDI, 0x11\n"
-		   "MOV R8, 0x22\n"
-		   "XCH R9, RAX\n"
-		   "SUBB 0x33\n"
-		   "CJNE RAX, 0x44, +0x02\n");
+	strv_t printed = strv_cstr(out);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: .section .text")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: .global global_name")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: label_name:")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: .byte 0x12")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: .word 0x1234")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: .long 0x12345678")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: .quad 0x000000009abcdef0")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: .string \"string_name\"")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: .rept 3")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: .endr")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: NOP(7)")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: SYSCALL")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: ENDBR64")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: RET")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: HLT")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: DIV_AB")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: SETB_C")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: RETI")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: DEC A")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: RL A")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: RLC A")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: JC +0x04")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: JB +0x05")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: JNB +0x06")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: JBC +0x07")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: MOVC A, [CODE:A+DPTR]")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: MUL_AB")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: CPL A")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: SETB [BIT:0x44]")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: DA A")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: XCHD A, [IRAM:R0]")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: PUSH RAX")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: POP R9")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: JE +0x04")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: JNE -0x04")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: JZ +0x05")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: JNZ +0x06")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: JNC +0x07")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: CALL +0x08")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: JMP +0x09")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: CLR RCX")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: SWAP RDX")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: INC RSP")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: RRC RBP")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: RR RSI")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: ADD RDI, 0x11")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: MOV R8, 0x22")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: XCH R9, RAX")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: SUBB 0x33")), 0);
+	EXPECT_NE(t_asmc_str_contains(printed, STRV("0x0000: CJNE RAX, 0x44, +0x02")), 0);
 
 	asmc_free(&print);
 	asmc_free(&asmc);

@@ -27,8 +27,8 @@ TEST(gen_asm_x86_print)
 		char buf[128] = {0};
 		EXPECT_GT(drv->print(drv, &asmc, DST_BUF(buf)), 0);
 		EXPECT_STR(buf,
-			   "\tmov $0x2a, %rax\n"
-			   "\tret\n");
+			   "0x0000: \tmov $0x2a, %rax\n"
+			   "0x0000: \tret\n");
 
 		asmc_free(&asmc);
 	}
@@ -85,14 +85,14 @@ TEST(gen_asm_x86_print_directives)
 		char buf[1024] = {0};
 		EXPECT_GT(drv->print(drv, &asmc, DST_BUF(buf)), 0);
 		EXPECT_STR(buf,
-			   ".section .text\n"
-			   ".global main\n"
-			   "main:\n"
-			   "\t.byte 0x11\n"
-			   "\t.word 0x2222\n"
-			   "\t.long 0x33333333\n"
-			   "\t.quad 0x0000000044444444\n"
-			   "\t.string \"hello\"\n");
+			   "0x0000: .section .text\n"
+			   "0x0000: .global main\n"
+			   "0x0000: main:\n"
+			   "0x0000: \t.byte 0x11\n"
+			   "0x0000: \t.word 0x2222\n"
+			   "0x0000: \t.long 0x33333333\n"
+			   "0x0000: \t.quad 0x0000000044444444\n"
+			   "0x0000: \t.string \"hello\"\n");
 
 		asmc_free(&asmc);
 	}
@@ -121,8 +121,8 @@ TEST(gen_asm_x86_print_nops)
 		char buf[64] = {0};
 		EXPECT_GT(drv->print(drv, &asmc, DST_BUF(buf)), 0);
 		EXPECT_STR(buf,
-			   "\tnop\n"
-			   "\t.rept 5\n"
+			   "0x0000: \tnop\n"
+			   "0x0000: \t.rept 5\n"
 			   "\t\tnop\n"
 			   "\t.endr\n");
 
@@ -187,16 +187,16 @@ TEST(gen_asm_x86_print_arithmetic)
 		char buf[512] = {0};
 		EXPECT_GT(drv->print(drv, &asmc, DST_BUF(buf)), 0);
 		EXPECT_STR(buf,
-			   "\tadd $0x1, %rax\n"
-			   "\tsub $0x2, %rbp\n"
-			   "\txor %rsi, %rdx\n"
-			   "\tcmp $0x12, %rdi\n"
-			   "\tand $0x3, 0x1234\n"
-			   "\ttest $0x4, %r9\n"
-			   "\tmov %eax, %rbp\n"
-			   "\tlea $0x5, %rsp\n"
-			   "\tshr $0x6, %rcx\n"
-			   "\tsar $0x7, %rdx\n");
+			   "0x0000: \tadd $0x1, %rax\n"
+			   "0x0000: \tsub $0x2, %rbp\n"
+			   "0x0000: \txor %rsi, %rdx\n"
+			   "0x0000: \tcmp $0x12, %rdi\n"
+			   "0x0000: \tand $0x3, 0x1234\n"
+			   "0x0000: \ttest $0x4, %r9\n"
+			   "0x0000: \tmov %eax, %rbp\n"
+			   "0x0000: \tlea $0x5, %rsp\n"
+			   "0x0000: \tshr $0x6, %rcx\n"
+			   "0x0000: \tsar $0x7, %rdx\n");
 
 		asmc_free(&asmc);
 	}
@@ -250,16 +250,16 @@ TEST(gen_asm_x86_print_control)
 		char buf[512] = {0};
 		EXPECT_GT(drv->print(drv, &asmc, DST_BUF(buf)), 0);
 		EXPECT_STR(buf,
-			   "\tpush %rbp\n"
-			   "\tpop %rbp\n"
-			   "\tje .+3\n"
-			   "\tjne .-1\n"
-			   "\tcall target+0x3(%rip)\n"
-			   "\tjmp .-1\n"
-			   "\tjmp *%rax\n"
-			   "\tret\n"
-			   "\thlt\n"
-			   "\t.byte 0x00\n");
+			   "0x0000: \tpush %rbp\n"
+			   "0x0000: \tpop %rbp\n"
+			   "0x0000: \tje .+3\n"
+			   "0x0000: \tjne .-1\n"
+			   "0x0000: \tcall target+0x3(%rip)\n"
+			   "0x0000: \tjmp .-1\n"
+			   "0x0000: \tjmp *%rax\n"
+			   "0x0000: \tret\n"
+			   "0x0000: \thlt\n"
+			   "0x0000: \t.byte 0x00\n");
 
 		asmc_free(&asmc);
 	}
@@ -389,7 +389,7 @@ TEST(gen_asm_x86_print_registers)
 			asmc_op_t *op = asmc_add_op(&asmc, 0, ASMC_OP_MOV);
 			op->src	      = (asmc_oper_t){.addr = ASMC_ADDR_REG, .size = 64, .val = regs[i].reg};
 			op->dst	      = (asmc_oper_t){.addr = ASMC_ADDR_REG, .size = 64, .val = regs[i].reg};
-			exp_dst.off += dputf(exp_dst, "\tmov %%%s, %%%s\n", regs[i].name, regs[i].name);
+			exp_dst.off += dputf(exp_dst, "0x0000: \tmov %%%s, %%%s\n", regs[i].name, regs[i].name);
 		}
 
 		char buf[4096] = {0};

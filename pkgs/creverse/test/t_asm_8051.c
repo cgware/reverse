@@ -46,8 +46,8 @@ TEST(gen_asm_8051_print)
 		char buf[128] = {0};
 		EXPECT_GT(drv->print(drv, &asmc, DST_BUF(buf)), 0);
 		EXPECT_STR(buf,
-			   "\tMOV A, #0x42\n"
-			   "\tRET\n");
+			   "0x0000: \tMOV A, #0x42\n"
+			   "0x0000: \tRET\n");
 
 		asmc_free(&asmc);
 	}
@@ -105,14 +105,14 @@ TEST(gen_asm_8051_print_directives)
 		char buf[1024] = {0};
 		EXPECT_GT(drv->print(drv, &asmc, DST_BUF(buf)), 0);
 		EXPECT_STR(buf,
-			   ".section .data\n"
-			   ".global main\n"
-			   "main:\n"
-			   "\tDB 0x11\n"
-			   "\tDW 0x2222\n"
-			   "\tDD 0x33333333\n"
-			   "\tDQ 0x0000000044444444\n"
-			   "\tDB \"hello\"\n");
+			   "0x0000: .section .data\n"
+			   "0x0000: .global main\n"
+			   "0x0000: main:\n"
+			   "0x0000: \tDB 0x11\n"
+			   "0x0000: \tDW 0x2222\n"
+			   "0x0000: \tDD 0x33333333\n"
+			   "0x0000: \tDQ 0x0000000044444444\n"
+			   "0x0000: \tDB \"hello\"\n");
 
 		asmc_free(&asmc);
 	}
@@ -145,13 +145,12 @@ TEST(gen_asm_8051_print_nops)
 
 		char buf[64] = {0};
 		EXPECT_GT(drv->print(drv, &asmc, DST_BUF(buf)), 0);
-		EXPECT_STR(buf,
-			   "\t.rept 3\n"
-			   "\t.endr\n"
-			   "\tNOP\n"
-			   "\t.rept 5\n"
-			   "\t\tNOP\n"
-			   "\t.endr\n");
+		strv_t out = strv_cstr(buf);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \t.rept 3\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \t.endr\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tNOP\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \t.rept 5\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\t.endr\n")), 0);
 
 		asmc_free(&asmc);
 	}
@@ -298,41 +297,41 @@ TEST(gen_asm_8051_print_ops)
 		char buf[1024] = {0};
 		EXPECT_GT(drv->print(drv, &asmc, DST_BUF(buf)), 0);
 		EXPECT_STR(buf,
-			   ".section .data\n"
-			   ".global main\n"
-			   "main:\n"
-			   "\tADD A, #0x01\n"
-			   "\tADDC A, R2\n"
-			   "\tSUBB A, #0x02\n"
-			   "\tORL A, R3\n"
-			   "\tXRL A, #0x03\n"
-			   "\tANL 0x1234, #0x04\n"
-			   "\tMOV 0x10, #0x05\n"
-			   "\tMOV DPTR, #0x1234\n"
-			   "\tMOVX A, @DPTR\n"
-			   "\tMOV A, #0x12345678\n"
-			   "\tMOVX @DPTR, A\n"
-			   "\tXCH A, R6\n"
-			   "\tRET\n"
-			   "\tLCALL 0x1234\n"
-			   "\tCALL A\n"
-			   "\tSJMP $+0x01\n"
-			   "\tSJMP $-0x02\n"
-			   "\tLJMP 0x1234\n"
-			   "\tJZ $+0x01\n"
-			   "\tJNZ $+0x01\n"
-			   "\tJNC $+0x01\n"
-			   "\tDJNZ R0, A\n"
-			   "\tCLR A\n"
-			   "\tMOV A, #0x00\n"
-			   "\tSWAP A\n"
-			   "\tINC A\n"
-			   "\tRRC A\n"
-			   "\tRR A\n"
-			   "\tDIV AB\n"
-			   "\tSETB C\n"
-			   "\tDB 0xA5\n"
-			   "\tMOV UNKNOWN, #0x42\n");
+			   "0x0000: .section .data\n"
+			   "0x0000: .global main\n"
+			   "0x0000: main:\n"
+			   "0x0000: \tADD A, #0x01\n"
+			   "0x0000: \tADDC A, R2\n"
+			   "0x0000: \tSUBB A, #0x02\n"
+			   "0x0000: \tORL A, R3\n"
+			   "0x0000: \tXRL A, #0x03\n"
+			   "0x0000: \tANL 0x1234, #0x04\n"
+			   "0x0000: \tMOV 0x10, #0x05\n"
+			   "0x0000: \tMOV DPTR, #0x1234\n"
+			   "0x0000: \tMOVX A, @DPTR\n"
+			   "0x0000: \tMOV A, #0x12345678\n"
+			   "0x0000: \tMOVX @DPTR, A\n"
+			   "0x0000: \tXCH A, R6\n"
+			   "0x0000: \tRET\n"
+			   "0x0000: \tLCALL 0x1234\n"
+			   "0x0000: \tCALL A\n"
+			   "0x0000: \tSJMP $+0x01\n"
+			   "0x0000: \tSJMP $-0x02\n"
+			   "0x0000: \tLJMP 0x1234\n"
+			   "0x0000: \tJZ $+0x01\n"
+			   "0x0000: \tJNZ $+0x01\n"
+			   "0x0000: \tJNC $+0x01\n"
+			   "0x0000: \tDJNZ R0, A\n"
+			   "0x0000: \tCLR A\n"
+			   "0x0000: \tMOV A, #0x00\n"
+			   "0x0000: \tSWAP A\n"
+			   "0x0000: \tINC A\n"
+			   "0x0000: \tRRC A\n"
+			   "0x0000: \tRR A\n"
+			   "0x0000: \tDIV AB\n"
+			   "0x0000: \tSETB C\n"
+			   "0x0000: \tDB 0xA5\n"
+			   "0x0000: \tMOV UNKNOWN, #0x42\n");
 
 		asmc_free(&asmc);
 	}
@@ -432,28 +431,28 @@ TEST(gen_asm_8051_print_more_ops)
 		EXPECT_GT(drv->print(drv, &asmc, DST_BUF(buf)), 0);
 		log_set_quiet(0, 0);
 		strv_t out = strv_cstr(buf);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tMOVC A, @A+DPTR\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tMOVC A, @A+PC\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tMOVX @0x55, @R1\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tXCHD A, @R0\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tRETI\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tACALL 0x0456\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tAJMP 0x0456\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tJMP A\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tJC $+0x03\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tJB 0x20, $+0x04\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tJNB /0x21, $+0x05\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tJBC 0x22, $+0x06\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tCJNE A, #0x33, $+0x07\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tCPL 0x23\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tSETB 0x24\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tDEC 0x25\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tRLC A\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tRL A\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tMUL AB\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tDA A\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tPUSH 0x26\n")), 0);
-		EXPECT_NE(t_asm_8051_str_contains(out, STRV("\tPOP 0x27\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tMOVC A, @A+DPTR\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tMOVC A, @A+PC\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tMOVX @0x55, @R1\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tXCHD A, @R0\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tRETI\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tACALL 0x0456\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tAJMP 0x0456\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tJMP A\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tJC $+0x03\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tJB 0x20, $+0x04\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tJNB /0x21, $+0x05\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tJBC 0x22, $+0x06\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tCJNE A, #0x33, $+0x07\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tCPL 0x23\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tSETB 0x24\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tDEC 0x25\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tRLC A\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tRL A\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tMUL AB\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tDA A\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tPUSH 0x26\n")), 0);
+		EXPECT_NE(t_asm_8051_str_contains(out, STRV("0x0000: \tPOP 0x27\n")), 0);
 
 		asmc_free(&asmc);
 	}

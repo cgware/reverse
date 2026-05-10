@@ -130,16 +130,7 @@ typedef struct llir_op_s {
 	llir_val_t src;
 	llir_val_t cmp;
 	llir_if_type_t subtype;
-	byte block_start;
-	byte remove;
-	llir_val_t dst_sub;
-	llir_val_t src_sub;
 } llir_op_t;
-
-typedef struct llir_block_s {
-	uint start;
-	uint end;
-} llir_block_t;
 
 typedef struct llir_s {
 	arr_t ops;
@@ -148,16 +139,8 @@ typedef struct llir_s {
 llir_t *llir_init(llir_t *llir, uint cap, alloc_t alloc);
 void llir_free(llir_t *llir);
 
-void llir_blocks(llir_t *llir);
-
-void llir_substitude(llir_t *llir);
-
-void llir_cleanup(const llir_t *src, llir_t *dst);
-
 const char *llir_reg_name(llir_reg_type_t reg);
 
 size_t llir_print(const llir_t *llir, dst_t dst);
-
-size_t llir_print_blocks(const llir_t *llir, dst_t dst);
 
 #endif

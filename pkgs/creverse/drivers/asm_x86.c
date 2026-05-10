@@ -151,6 +151,14 @@ static size_t asm_x86_print_jump_target(const asmc_t *asmc, const asmc_op_t *op,
 	return dst.off - off;
 }
 
+static size_t asm_x86_print_op_prefix(const asmc_op_t *op, dst_t dst)
+{
+	size_t off = dst.off;
+
+	dst.off += dputf(dst, "0x%04X: ", op->addr);
+	return dst.off - off;
+}
+
 static size_t asm_x86_print(const gen_asm_driver_t *drv, const asmc_t *asmc, dst_t dst)
 {
 	(void)drv;
@@ -165,6 +173,7 @@ static size_t asm_x86_print(const gen_asm_driver_t *drv, const asmc_t *asmc, dst
 	asmc_op_t *op;
 	arr_foreach(&asmc->ops, i, op)
 	{
+		dst.off += asm_x86_print_op_prefix(op, dst);
 		switch (op->type) {
 		case ASMC_OP_SECTION: {
 			strv_t str = strvbuf_get(&asmc->strs, op->str);

@@ -21,7 +21,12 @@ int llir_asmc(const llir_t *llir, const asmc_llir_ctx_t *ctx, asmc_t *asmc)
 	}
 
 	if (llir->ops.cnt != ctx->ops.cnt) {
-		log_error("reverse", "llir_asmc", NULL, "llir and asmc context operation count mismatch");
+		log_error("reverse",
+			  "llir_asmc",
+			  NULL,
+			  "llir and asmc context operation count mismatch: llir=%zu ctx=%zu",
+			  llir->ops.cnt,
+			  ctx->ops.cnt);
 		return 1;
 	}
 
@@ -37,6 +42,7 @@ int llir_asmc(const llir_t *llir, const asmc_llir_ctx_t *ctx, asmc_t *asmc)
 
 		asmc_op_t *dst = asmc_add_op(asmc, ctx_op->asmc.addr, ctx_op->asmc.type);
 		if (dst == NULL) {
+			log_error("reverse", "llir_asmc", NULL, "failed to append asmc op at 0x%04X", op->addr);
 			return 1;
 		}
 
@@ -44,6 +50,7 @@ int llir_asmc(const llir_t *llir, const asmc_llir_ctx_t *ctx, asmc_t *asmc)
 
 		if (llir_asmc_op_has_str(dst->type)) {
 			if (!ctx_op->asmc_has_str || strvbuf_add(&asmc->strs, ctx_op->asmc_str, &dst->str)) {
+				log_error("reverse", "llir_asmc", NULL, "failed to copy string metadata for op at 0x%04X", op->addr);
 				return 1;
 			}
 		}

@@ -22,14 +22,14 @@ static int ensure_out_dir(fs_t *fs)
 	return 0;
 }
 
-static int print_asm_output(fs_t *fs, const gen_asm_driver_t *asm_drv, const asmc_t *asmc)
+static int print_asm_output(fs_t *fs, const gen_asm_driver_t *asm_drv, const asmc_t *asmc, strv_t path)
 {
 	if (ensure_out_dir(fs)) {
 		return 1;
 	}
 
 	void *file = NULL;
-	if (fs_open(fs, STRV("out/main.s"), "w", &file)) {
+	if (fs_open(fs, path, "w", &file)) {
 		return 1;
 	}
 
@@ -45,11 +45,11 @@ static int print_llir_output(fs_t *fs, const llir_t *llir)
 	}
 
 	void *file = NULL;
-	if (fs_open(fs, STRV("out/main.llir"), "w", &file)) {
+	if (fs_open(fs, STRV("out/in.llir"), "w", &file)) {
 		return 1;
 	}
 
-	llir_print_blocks(llir, DST_FS(fs, file));
+	llir_print(llir, DST_FS(fs, file));
 	fs_close(fs, file);
 	return 0;
 }
@@ -91,6 +91,7 @@ static int reverse_pass_run_all(const reverse_pass_t *passes, size_t cnt, revers
 	for (size_t i = 0; i < cnt; i++) {
 		int ret = reverse_pass_run(&passes[i], pipeline);
 		if (ret) {
+			log_error("reverse", "main", NULL, "Step failed: %.*s", (int)passes[i].name.len, passes[i].name.data);
 			return ret;
 		}
 	}
@@ -98,13 +99,11 @@ static int reverse_pass_run_all(const reverse_pass_t *passes, size_t cnt, revers
 	return 0;
 }
 
-static int reverse_pass_llir_ssa(reverse_pipeline_t *pipeline)
+static int reverse_pass_asmc_llir(reverse_pipeline_t *pipeline)
 {
 	log_info("reverse", "main", NULL, "Step: ASMC -> LLIR");
 	asmc_llir(pipeline->llir, pipeline->asmc_ctx, pipeline->asmc);
-	log_info("reverse", "main", NULL, "Step: LLIR blocks");
-	llir_blocks(pipeline->llir);
-	log_info("reverse", "main", NULL, "Step: write LLIR to out/main.llir");
+	log_info("reverse", "main", NULL, "Step: write LLIR to out/in.llir");
 	return print_llir_output(pipeline->fs, pipeline->llir);
 }
 
@@ -112,6 +111,7 @@ static int reverse_pass_llir_asmc(reverse_pipeline_t *pipeline)
 {
 	log_info("reverse", "main", NULL, "Step: LLIR -> ASMC");
 	if (llir_asmc(pipeline->llir, pipeline->asmc_ctx, pipeline->asmc_out)) {
+		log_error("reverse", "main", NULL, "LLIR -> ASMC conversion failed");
 		return 1;
 	}
 
@@ -121,8 +121,8 @@ static int reverse_pass_llir_asmc(reverse_pipeline_t *pipeline)
 		return 1;
 	}
 
-	log_info("reverse", "main", NULL, "Step: write ASMC to out/main.s (%.*s)", (int)asm_drv->name.len, asm_drv->name.data);
-	return print_asm_output(pipeline->fs, asm_drv, pipeline->asmc_out);
+	log_info("reverse", "main", NULL, "Step: write ASMC to out/out.s (%.*s)", (int)asm_drv->name.len, asm_drv->name.data);
+	return print_asm_output(pipeline->fs, asm_drv, pipeline->asmc_out, STRV("out/out.s"));
 }
 
 static int reverse_pass_asmc_bin(reverse_pipeline_t *pipeline)
@@ -143,7 +143,7 @@ static int reverse_pass_asmc_bin(reverse_pipeline_t *pipeline)
 		 "Step: FORMAT -> BIN (%.*s)",
 		 (int)pipeline->format_drv->name.len,
 		 pipeline->format_drv->name.data);
-	log_info("reverse", "main", NULL, "Step: write BIN to out/main.bin");
+	log_info("reverse", "main", NULL, "Step: write BIN to out/out.bin");
 	return print_bin_output(pipeline->fs, pipeline->bin_out);
 }
 
@@ -154,7 +154,7 @@ static int print_bin_output(fs_t *fs, const bin_t *bin)
 	}
 
 	void *file = NULL;
-	if (fs_open(fs, STRV("out/main.bin"), "wb", &file)) {
+	if (fs_open(fs, STRV("out/out.bin"), "wb", &file)) {
 		return 1;
 	}
 
@@ -170,7 +170,7 @@ static int parse_format_image(fs_t *fs, const format_driver_t *format_drv, const
 	}
 
 	void *file = NULL;
-	if (fs_open(fs, STRV("out/main.format"), "w", &file)) {
+	if (fs_open(fs, STRV("out/in.format"), "w", &file)) {
 		return 1;
 	}
 
@@ -376,7 +376,7 @@ int main(int argc, const char **argv)
 			ret = 1;
 		} else {
 			void *file = NULL;
-			if (fs_open(&fs, STRV("out/main.sections"), "w", &file)) {
+			if (fs_open(&fs, STRV("out/in.sections"), "w", &file)) {
 				ret = 1;
 			} else {
 				reverse_image_print_sections(&image, DST_FS(&fs, file));
@@ -407,6 +407,19 @@ int main(int argc, const char **argv)
 				ret = format_drv->emit(format_drv, &image, &asmc, ALLOC_STD);
 			}
 			uint llir_cap = asmc.ops.cnt == 0 ? 1 : asmc.ops.cnt;
+			gen_asm_driver_t *asm_drv = asm_gen == 0 ? gen_asm_driver_find(arch_drv->name) : asm_drivers[asm_gen].priv;
+			if (ret == 0 && asm_drv == NULL) {
+				log_error("reverse", "main", NULL, "Failed to detect assembly generator driver");
+				ret = 1;
+			} else if (ret == 0) {
+				log_info("reverse",
+					 "main",
+					 NULL,
+					 "Step: write ASMC to out/in.s (%.*s)",
+					 (int)asm_drv->name.len,
+					 asm_drv->name.data);
+				ret = print_asm_output(&fs, asm_drv, &asmc, STRV("out/in.s"));
+			}
 			if (ret == 0 && llir_init(&llir, llir_cap, ALLOC_STD) == NULL) {
 				ret = 1;
 			} else if (ret == 0 && asmc_llir_ctx_init(&asmc_ctx, llir_cap, ALLOC_STD) == NULL) {
@@ -414,36 +427,35 @@ int main(int argc, const char **argv)
 			} else if (ret == 0 && asmc_init(&asmc_out, llir_cap, ALLOC_STD) == NULL) {
 				ret = 1;
 			} else if (ret == 0) {
-				llir_ready	= 1;
+				llir_ready	    = 1;
 				llir_asmc_ready = 1;
-				asmc_out_ready	= 1;
+				asmc_out_ready  = 1;
 
 				reverse_pipeline_t pipeline = {
-					.fs	    = &fs,
+					.fs		 = &fs,
 					.format_drv = format_drv,
-					.asm_drv    = NULL,
-					.llir	    = &llir,
-					.asmc	    = &asmc,
-					.asmc_ctx   = &asmc_ctx,
-					.bin	    = &bin,
-					.bin_out    = &bin_out,
-					.asmc_out   = &asmc_out,
-					.llir_cap   = llir_cap,
+					.asm_drv	 = asm_drv,
+					.llir		 = &llir,
+					.asmc		 = &asmc,
+					.asmc_ctx	 = &asmc_ctx,
+					.bin		 = &bin,
+					.bin_out	 = &bin_out,
+					.asmc_out	 = &asmc_out,
+					.llir_cap	 = llir_cap,
 				};
 
-				gen_asm_driver_t *asm_drv = asm_gen == 0 ? gen_asm_driver_find(arch_drv->name) : asm_drivers[asm_gen].priv;
-				if (asm_drv == NULL) {
-					log_error("reverse", "main", NULL, "Failed to detect assembly generator driver");
-					ret = 1;
+				reverse_pass_t passes[3] = {
+					{.name = STRV("ASMC -> LLIR"), .fn = reverse_pass_asmc_llir},
+					{.name = STRV("LLIR -> ASMC"), .fn = reverse_pass_llir_asmc},
+				};
+				size_t pass_cnt = 2;
+				if (asm_drv->name.len == 3 && mem_cmp(asm_drv->name.data, "x86", 3) == 0) {
+					log_info("reverse", "main", NULL, "Step: skip ASMC -> FORMAT -> BIN (x86 not supported)");
 				} else {
-					pipeline.asm_drv	= asm_drv;
-					reverse_pass_t passes[] = {
-						{.name = STRV("ASMC -> LLIR"), .fn = reverse_pass_llir_ssa},
-						{.name = STRV("LLIR -> ASMC"), .fn = reverse_pass_llir_asmc},
-						{.name = STRV("ASMC -> FORMAT -> BIN"), .fn = reverse_pass_asmc_bin},
-					};
-					ret = reverse_pass_run_all(passes, sizeof(passes) / sizeof(passes[0]), &pipeline);
+					reverse_pass_t bin_pass = {.name = STRV("ASMC -> FORMAT -> BIN"), .fn = reverse_pass_asmc_bin};
+					passes[pass_cnt++]	   = bin_pass;
 				}
+				ret = reverse_pass_run_all(passes, pass_cnt, &pipeline);
 			}
 		}
 	}
