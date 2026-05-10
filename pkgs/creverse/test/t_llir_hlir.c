@@ -1,5 +1,6 @@
-#include "llir_ast.h"
+#include "llir_hlir.h"
 #include "ast.h"
+#include "hlir_ast.h"
 #include "ast_c.h"
 
 #include "log.h"
@@ -23,23 +24,34 @@ static int t_c_str_contains(strv_t haystack, strv_t needle)
 	return 0;
 }
 
-static size_t llir_ast_print(const llir_cflow_t *cflow, const llir_ssa_t *ssa, const llir_expr_t *expr, const llir_vars_t *vars,
+static size_t llir_hlir_print(const llir_cflow_t *cflow, const llir_ssa_t *ssa, const llir_expr_t *expr, const llir_vars_t *vars,
 			     const llir_types_t *types, dst_t dst)
 {
+	hlir_t hlir = {0};
 	ast_t ast = {0};
-	if (ast_init(&ast) == NULL) {
+	if (hlir_init(&hlir) == NULL) {
 		return 0;
 	}
-	if (llir_ast_gen(&ast, cflow, ssa, expr, vars, types) != 0) {
+	if (llir_hlir_gen(&hlir, cflow, ssa, expr, vars, types) != 0) {
+		hlir_free(&hlir);
+		return 0;
+	}
+	if (ast_init(&ast) == NULL) {
+		hlir_free(&hlir);
+		return 0;
+	}
+	if (hlir_ast_gen(&ast, &hlir) != 0) {
 		ast_free(&ast);
+		hlir_free(&hlir);
 		return 0;
 	}
 	size_t len = ast_c_print(&ast, dst);
 	ast_free(&ast);
+	hlir_free(&hlir);
 	return len;
 }
 
-#define ast_print llir_ast_print
+#define hlir_print llir_hlir_print
 
 static uint t_c_add_ssa_block(llir_ssa_t *ssa)
 {
@@ -137,51 +149,51 @@ static llir_types_var_t *t_c_add_type_var(llir_types_t *types, llir_reg_type_t r
 	return var;
 }
 
-TEST(llir_ast_api_null_safety)
+TEST(llir_hlir_api_null_safety)
 {
 	START;
 
-	ast_t ast = {0};
-	ast_t bad = {0};
+	hlir_t ast = {0};
+	hlir_t bad = {0};
 	llir_cflow_t cflow = {0};
 	llir_ssa_t ssa = {0};
 	llir_expr_t expr = {0};
 	llir_vars_t vars = {0};
 	llir_types_t types = {0};
-	EXPECT_EQ(ast_init(NULL), NULL);
-	EXPECT_EQ(llir_ast_gen(NULL, NULL, NULL, NULL, NULL, NULL), 1);
-	ast_free(NULL);
-	ast_reset(NULL);
+	EXPECT_EQ(hlir_init(NULL), NULL);
+	EXPECT_EQ(llir_hlir_gen(NULL, NULL, NULL, NULL, NULL, NULL), 1);
+	hlir_free(NULL);
+	hlir_reset(NULL);
 
-	EXPECT_NE(ast_init(&ast), NULL);
-	EXPECT_NE(ast_get(&ast, AST_ROOT), NULL);
-	EXPECT_EQ(ast_get(&ast, AST_ROOT)->kind, AST_KIND_ROOT);
-	EXPECT_EQ(ast_get(&ast, AST_ROOT)->text.data, NULL);
-	EXPECT_EQ(ast_get(&ast, AST_ROOT)->text.len, 0);
+	EXPECT_NE(hlir_init(&ast), NULL);
+	EXPECT_NE(hlir_get(&ast, HLIR_ROOT), NULL);
+	EXPECT_EQ(hlir_get(&ast, HLIR_ROOT)->kind, HLIR_KIND_ROOT);
+	EXPECT_EQ(hlir_get(&ast, HLIR_ROOT)->text.data, NULL);
+	EXPECT_EQ(hlir_get(&ast, HLIR_ROOT)->text.len, 0);
 
-	EXPECT_EQ(llir_ast_gen(&bad, &cflow, &ssa, &expr, &vars, &types), 1);
-	EXPECT_EQ(llir_ast_gen(&ast, &cflow, &ssa, &expr, &vars, &types), 0);
-	EXPECT_NE(ast_get_child(&ast, AST_ROOT, NULL), NULL);
+	EXPECT_EQ(llir_hlir_gen(&bad, &cflow, &ssa, &expr, &vars, &types), 1);
+	EXPECT_EQ(llir_hlir_gen(&ast, &cflow, &ssa, &expr, &vars, &types), 0);
+	EXPECT_NE(hlir_get(&ast, 1), NULL);
 	EXPECT_GT(ast.cnt, 1);
 
-	ast_free(&ast);
+	hlir_free(&ast);
 	EXPECT_EQ(ast.data, NULL);
 	EXPECT_EQ(ast.cnt, 0);
 
 	END;
 }
 
-TEST(llir_ast_print_api_null_safety)
+TEST(llir_hlir_print_api_null_safety)
 {
 	START;
 
 	char out[32] = {0};
-	EXPECT_EQ(llir_ast_print(NULL, NULL, NULL, NULL, NULL, DST_BUF(out)), 0);
+	EXPECT_EQ(llir_hlir_print(NULL, NULL, NULL, NULL, NULL, DST_BUF(out)), 0);
 
 	END;
 }
 
-TEST(llir_ast_print_no_vars)
+TEST(llir_hlir_print_no_vars)
 {
 	START;
 
@@ -203,7 +215,7 @@ TEST(llir_ast_print_no_vars)
 
 	char out[256] = {0};
 	dst_t dst = DST_BUF(out);
-	size_t len = llir_ast_print(&cflow, &ssa, &expr, &vars, &types, dst);
+	size_t len = llir_hlir_print(&cflow, &ssa, &expr, &vars, &types, dst);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("void recovered(void)")), 1);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("uint8_t")), 0);
@@ -217,7 +229,7 @@ TEST(llir_ast_print_no_vars)
 	END;
 }
 
-TEST(llir_ast_print_type_fallback)
+TEST(llir_hlir_print_type_fallback)
 {
 	START;
 
@@ -243,7 +255,7 @@ TEST(llir_ast_print_type_fallback)
 
 	char out[256] = {0};
 	dst_t dst = DST_BUF(out);
-	size_t len = llir_ast_print(&cflow, &ssa, &expr, &vars, NULL, dst);
+	size_t len = llir_hlir_print(&cflow, &ssa, &expr, &vars, NULL, dst);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("uint8_t A;")), 1);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("uint8_t B;")), 1);
@@ -260,7 +272,7 @@ TEST(llir_ast_print_type_fallback)
 	END;
 }
 
-TEST(llir_ast_print_type_lookup_miss)
+TEST(llir_hlir_print_type_lookup_miss)
 {
 	START;
 
@@ -284,7 +296,7 @@ TEST(llir_ast_print_type_lookup_miss)
 
 	char out[128] = {0};
 	dst_t dst = DST_BUF(out);
-	size_t len = llir_ast_print(&cflow, &ssa, &expr, &vars, &types, dst);
+	size_t len = llir_hlir_print(&cflow, &ssa, &expr, &vars, &types, dst);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("uint8_t A;")), 1);
 
@@ -297,18 +309,18 @@ TEST(llir_ast_print_type_lookup_miss)
 	END;
 }
 
-TEST(llir_ast_gen_oom_block_vars)
+TEST(llir_hlir_gen_oom_block_vars)
 {
 	START;
 
-	ast_t ast = {0};
+	hlir_t ast = {0};
 	llir_ssa_t ssa = {0};
 	llir_expr_t expr = {0};
 	llir_cflow_t cflow = {0};
 	llir_vars_t vars = {0};
 	llir_types_t types = {0};
 
-	EXPECT_NE(ast_init(&ast), NULL);
+	EXPECT_NE(hlir_init(&ast), NULL);
 	EXPECT_NE(llir_ssa_init(&ssa, ALLOC_STD), NULL);
 	EXPECT_NE(llir_expr_init(&expr, 1, ALLOC_STD), NULL);
 	EXPECT_NE(llir_cflow_init(&cflow, 1, ALLOC_STD), NULL);
@@ -332,7 +344,7 @@ TEST(llir_ast_gen_oom_block_vars)
 	for (uint oom = 1; oom <= 128; oom++) {
 		mem_oom(oom);
 		log_set_quiet(0, 1);
-		int ret = llir_ast_gen(&ast, &cflow, &ssa, &expr, &vars, &types);
+		int ret = llir_hlir_gen(&ast, &cflow, &ssa, &expr, &vars, &types);
 		log_set_quiet(0, 0);
 		mem_oom(0);
 		if (ret != 0) {
@@ -341,7 +353,7 @@ TEST(llir_ast_gen_oom_block_vars)
 	}
 	EXPECT_EQ(hit, 1);
 
-	ast_free(&ast);
+	hlir_free(&ast);
 	llir_types_free(&types);
 	llir_vars_free(&vars);
 	llir_cflow_free(&cflow);
@@ -351,18 +363,18 @@ TEST(llir_ast_gen_oom_block_vars)
 	END;
 }
 
-TEST(llir_ast_gen_oom_loop_node)
+TEST(llir_hlir_gen_oom_loop_node)
 {
 	START;
 
-	ast_t ast = {0};
+	hlir_t ast = {0};
 	llir_ssa_t ssa = {0};
 	llir_expr_t expr = {0};
 	llir_cflow_t cflow = {0};
 	llir_vars_t vars = {0};
 	llir_types_t types = {0};
 
-	EXPECT_NE(ast_init(&ast), NULL);
+	EXPECT_NE(hlir_init(&ast), NULL);
 	EXPECT_NE(llir_ssa_init(&ssa, ALLOC_STD), NULL);
 	EXPECT_NE(llir_expr_init(&expr, 2, ALLOC_STD), NULL);
 	EXPECT_NE(llir_cflow_init(&cflow, 2, ALLOC_STD), NULL);
@@ -407,7 +419,7 @@ TEST(llir_ast_gen_oom_loop_node)
 	for (uint oom = 1; oom <= 128; oom++) {
 		mem_oom(oom);
 		log_set_quiet(0, 1);
-		int ret = llir_ast_gen(&ast, &cflow, &ssa, &expr, &vars, &types);
+		int ret = llir_hlir_gen(&ast, &cflow, &ssa, &expr, &vars, &types);
 		log_set_quiet(0, 0);
 		mem_oom(0);
 		if (ret != 0) {
@@ -416,7 +428,7 @@ TEST(llir_ast_gen_oom_loop_node)
 	}
 	EXPECT_EQ(hit, 1);
 
-	ast_free(&ast);
+	hlir_free(&ast);
 	llir_types_free(&types);
 	llir_vars_free(&vars);
 	llir_cflow_free(&cflow);
@@ -426,7 +438,7 @@ TEST(llir_ast_gen_oom_loop_node)
 	END;
 }
 
-TEST(llir_ast_print_binary_operator_text)
+TEST(llir_hlir_print_binary_operator_text)
 {
 	START;
 
@@ -496,7 +508,7 @@ TEST(llir_ast_print_binary_operator_text)
 	char out[256] = {0};
 	dst_t dst = DST_BUF(out);
 	log_set_quiet(0, 1);
-	size_t len = ast_print(&cflow, &ssa, &expr, &vars, &types, dst);
+	size_t len = hlir_print(&cflow, &ssa, &expr, &vars, &types, dst);
 	log_set_quiet(0, 0);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("A = (A + B);")), 1);
@@ -514,7 +526,7 @@ TEST(llir_ast_print_binary_operator_text)
 	END;
 }
 
-TEST(llir_ast_print_exhaustive)
+TEST(llir_hlir_print_exhaustive)
 {
 	START;
 
@@ -523,14 +535,14 @@ TEST(llir_ast_print_exhaustive)
 	llir_cflow_t cflow = {0};
 	llir_vars_t vars = {0};
 	llir_types_t types = {0};
-	ast_t ast = {0};
+	hlir_t ast = {0};
 
 	EXPECT_NE(llir_ssa_init(&ssa, ALLOC_STD), NULL);
 	EXPECT_NE(llir_expr_init(&expr, 8, ALLOC_STD), NULL);
 	EXPECT_NE(llir_cflow_init(&cflow, 8, ALLOC_STD), NULL);
 	EXPECT_NE(llir_vars_init(&vars, 8, ALLOC_STD), NULL);
 	EXPECT_NE(llir_types_init(&types, 8, ALLOC_STD), NULL);
-	EXPECT_NE(ast_init(&ast), NULL);
+	EXPECT_NE(hlir_init(&ast), NULL);
 
 	for (uint i = 0; i < 6; i++) {
 		EXPECT_NE(t_c_add_ssa_block(&ssa), UINT_MAX);
@@ -792,7 +804,7 @@ TEST(llir_ast_print_exhaustive)
 	char out[1024] = {0};
 	dst_t dst = DST_BUF(out);
 	log_set_quiet(0, 1);
-	size_t len = ast_print(&cflow, &ssa, &expr, &vars, &types, dst);
+	size_t len = hlir_print(&cflow, &ssa, &expr, &vars, &types, dst);
 	log_set_quiet(0, 0);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("#include <stdbool.h>")), 1);
@@ -822,7 +834,7 @@ TEST(llir_ast_print_exhaustive)
 
 	for (uint oom = 1; oom <= 96; oom++) {
 		mem_oom(oom);
-		EXPECT_EQ(llir_ast_gen(&ast, &cflow, &ssa, &expr, &vars, &types), 1);
+		EXPECT_EQ(llir_hlir_gen(&ast, &cflow, &ssa, &expr, &vars, &types), 1);
 		mem_oom(0);
 	}
 
@@ -831,12 +843,12 @@ TEST(llir_ast_print_exhaustive)
 	llir_cflow_free(&cflow);
 	llir_expr_free(&expr);
 	llir_ssa_free(&ssa);
-	ast_free(&ast);
+	hlir_free(&ast);
 
 	END;
 }
 
-TEST(llir_ast_print_unknown_stmt_kind)
+TEST(llir_hlir_print_unknown_stmt_kind)
 {
 	START;
 
@@ -867,7 +879,7 @@ TEST(llir_ast_print_unknown_stmt_kind)
 
 	char out[64] = {0};
 	dst_t dst = DST_BUF(out);
-	size_t len = ast_print(&cflow, &ssa, &expr, NULL, NULL, dst);
+	size_t len = hlir_print(&cflow, &ssa, &expr, NULL, NULL, dst);
 	EXPECT_GT(len, 0);
 
 	llir_cflow_free(&cflow);
@@ -877,18 +889,18 @@ TEST(llir_ast_print_unknown_stmt_kind)
 	END;
 }
 
-TEST(llir_ast_gen_oom_plain_paths)
+TEST(llir_hlir_gen_oom_plain_paths)
 {
 	START;
 
-	ast_t ast = {0};
+	hlir_t ast = {0};
 	llir_ssa_t ssa = {0};
 	llir_expr_t expr = {0};
 	llir_cflow_t cflow = {0};
 	llir_vars_t vars = {0};
 	llir_types_t types = {0};
 
-	EXPECT_NE(ast_init(&ast), NULL);
+	EXPECT_NE(hlir_init(&ast), NULL);
 	EXPECT_NE(llir_ssa_init(&ssa, ALLOC_STD), NULL);
 	EXPECT_NE(llir_expr_init(&expr, 8, ALLOC_STD), NULL);
 	EXPECT_NE(llir_cflow_init(&cflow, 1, ALLOC_STD), NULL);
@@ -1006,11 +1018,11 @@ TEST(llir_ast_gen_oom_plain_paths)
 
 	for (uint oom = 1; oom <= 48; oom++) {
 		mem_oom(oom);
-		EXPECT_EQ(llir_ast_gen(&ast, &cflow, &ssa, &expr, &vars, &types), 1);
+		EXPECT_EQ(llir_hlir_gen(&ast, &cflow, &ssa, &expr, &vars, &types), 1);
 		mem_oom(0);
 	}
 
-	ast_free(&ast);
+	hlir_free(&ast);
 	llir_types_free(&types);
 	llir_vars_free(&vars);
 	llir_cflow_free(&cflow);
@@ -1020,18 +1032,18 @@ TEST(llir_ast_gen_oom_plain_paths)
 	END;
 }
 
-TEST(llir_ast_gen_oom_setup_paths)
+TEST(llir_hlir_gen_oom_setup_paths)
 {
 	START;
 
-	ast_t ast = {0};
+	hlir_t ast = {0};
 	llir_ssa_t ssa = {0};
 	llir_expr_t expr = {0};
 	llir_cflow_t cflow = {0};
 	llir_vars_t vars = {0};
 	llir_types_t types = {0};
 
-	EXPECT_NE(ast_init(&ast), NULL);
+	EXPECT_NE(hlir_init(&ast), NULL);
 	EXPECT_NE(llir_ssa_init(&ssa, ALLOC_STD), NULL);
 	EXPECT_NE(llir_expr_init(&expr, 1, ALLOC_STD), NULL);
 	EXPECT_NE(llir_cflow_init(&cflow, 1, ALLOC_STD), NULL);
@@ -1053,11 +1065,11 @@ TEST(llir_ast_gen_oom_setup_paths)
 
 	for (uint oom = 1; oom <= 12; oom++) {
 		mem_oom(oom);
-		EXPECT_EQ(llir_ast_gen(&ast, &cflow, &ssa, &expr, &vars, &types), 1);
+		EXPECT_EQ(llir_hlir_gen(&ast, &cflow, &ssa, &expr, &vars, &types), 1);
 		mem_oom(0);
 	}
 
-	ast_free(&ast);
+	hlir_free(&ast);
 	llir_types_free(&types);
 	llir_vars_free(&vars);
 	llir_cflow_free(&cflow);
@@ -1067,18 +1079,18 @@ TEST(llir_ast_gen_oom_setup_paths)
 	END;
 }
 
-TEST(llir_ast_gen_oom_text_reuse)
+TEST(llir_hlir_gen_oom_text_reuse)
 {
 	START;
 
-	ast_t ast = {0};
+	hlir_t ast = {0};
 	llir_ssa_t ssa = {0};
 	llir_expr_t expr = {0};
 	llir_cflow_t cflow = {0};
 	llir_vars_t vars = {0};
 	llir_types_t types = {0};
 
-	EXPECT_NE(ast_init(&ast), NULL);
+	EXPECT_NE(hlir_init(&ast), NULL);
 	EXPECT_NE(llir_ssa_init(&ssa, ALLOC_STD), NULL);
 	EXPECT_NE(llir_expr_init(&expr, 1, ALLOC_STD), NULL);
 	EXPECT_NE(llir_cflow_init(&cflow, 1, ALLOC_STD), NULL);
@@ -1096,12 +1108,12 @@ TEST(llir_ast_gen_oom_text_reuse)
 		cblock->then_block = UINT_MAX;
 	}
 
-	EXPECT_EQ(llir_ast_gen(&ast, &cflow, &ssa, &expr, &vars, &types), 0);
+	EXPECT_EQ(llir_hlir_gen(&ast, &cflow, &ssa, &expr, &vars, &types), 0);
 	mem_oom(1);
-	EXPECT_EQ(llir_ast_gen(&ast, &cflow, &ssa, &expr, &vars, &types), 1);
+	EXPECT_EQ(llir_hlir_gen(&ast, &cflow, &ssa, &expr, &vars, &types), 1);
 	mem_oom(0);
 
-	ast_free(&ast);
+	hlir_free(&ast);
 	llir_types_free(&types);
 	llir_vars_free(&vars);
 	llir_cflow_free(&cflow);
@@ -1111,18 +1123,18 @@ TEST(llir_ast_gen_oom_text_reuse)
 	END;
 }
 
-TEST(llir_ast_gen_invalid_block_guard)
+TEST(llir_hlir_gen_invalid_block_guard)
 {
 	START;
 
-	ast_t ast = {0};
+	hlir_t ast = {0};
 	llir_ssa_t ssa = {0};
 	llir_expr_t expr = {0};
 	llir_cflow_t cflow = {0};
 	llir_vars_t vars = {0};
 	llir_types_t types = {0};
 
-	EXPECT_NE(ast_init(&ast), NULL);
+	EXPECT_NE(hlir_init(&ast), NULL);
 	EXPECT_NE(llir_ssa_init(&ssa, ALLOC_STD), NULL);
 	EXPECT_NE(llir_expr_init(&expr, 1, ALLOC_STD), NULL);
 	EXPECT_NE(llir_cflow_init(&cflow, 1, ALLOC_STD), NULL);
@@ -1139,14 +1151,12 @@ TEST(llir_ast_gen_invalid_block_guard)
 		cblock->then_block = UINT_MAX;
 	}
 
-	EXPECT_EQ(llir_ast_gen(&ast, &cflow, &ssa, &expr, &vars, &types), 0);
-
 	char out[128] = {0};
-	size_t len = ast_c_print(&ast, DST_BUF(out));
+	size_t len = hlir_print(&cflow, &ssa, &expr, &vars, &types, DST_BUF(out));
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("void recovered(void)")), 1);
 
-	ast_free(&ast);
+	hlir_free(&ast);
 	llir_types_free(&types);
 	llir_vars_free(&vars);
 	llir_cflow_free(&cflow);
@@ -1156,7 +1166,7 @@ TEST(llir_ast_gen_invalid_block_guard)
 	END;
 }
 
-TEST(llir_ast_print_control_flow_paths)
+TEST(llir_hlir_print_control_flow_paths)
 {
 	START;
 
@@ -1242,7 +1252,7 @@ TEST(llir_ast_print_control_flow_paths)
 	char out[512] = {0};
 	dst_t dst = DST_BUF(out);
 	log_set_quiet(0, 1);
-	size_t len = ast_print(&cflow, &ssa, &expr, NULL, NULL, dst);
+	size_t len = hlir_print(&cflow, &ssa, &expr, NULL, NULL, dst);
 	log_set_quiet(0, 0);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("void recovered(void)")), 1);
@@ -1254,7 +1264,7 @@ TEST(llir_ast_print_control_flow_paths)
 	END;
 }
 
-TEST(llir_ast_print_fallback_nodes)
+TEST(llir_hlir_print_fallback_nodes)
 {
 	START;
 
@@ -1295,7 +1305,7 @@ TEST(llir_ast_print_fallback_nodes)
 	char out[256] = {0};
 	dst_t dst = DST_BUF(out);
 	log_set_quiet(0, 1);
-	size_t len = ast_print(&cflow, &ssa, &expr, NULL, NULL, dst);
+	size_t len = hlir_print(&cflow, &ssa, &expr, NULL, NULL, dst);
 	log_set_quiet(0, 0);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("unknown")), 1);
@@ -1309,7 +1319,7 @@ TEST(llir_ast_print_fallback_nodes)
 	END;
 }
 
-TEST(llir_ast_print_unknown_unary)
+TEST(llir_hlir_print_unknown_unary)
 {
 	START;
 
@@ -1342,7 +1352,7 @@ TEST(llir_ast_print_unknown_unary)
 
 	char out[128] = {0};
 	dst_t dst = DST_BUF(out);
-	size_t len = ast_print(&cflow, &ssa, &expr, NULL, NULL, dst);
+	size_t len = hlir_print(&cflow, &ssa, &expr, NULL, NULL, dst);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("0 /* unknown */")), 1);
 
@@ -1353,7 +1363,7 @@ TEST(llir_ast_print_unknown_unary)
 	END;
 }
 
-TEST(llir_ast_print_unknown_binary)
+TEST(llir_hlir_print_unknown_binary)
 {
 	START;
 
@@ -1388,7 +1398,7 @@ TEST(llir_ast_print_unknown_binary)
 
 	char out[128] = {0};
 	dst_t dst = DST_BUF(out);
-	size_t len = ast_print(&cflow, &ssa, &expr, NULL, NULL, dst);
+	size_t len = hlir_print(&cflow, &ssa, &expr, NULL, NULL, dst);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("A = (A ?")), 1);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("B);")), 1);
@@ -1400,7 +1410,7 @@ TEST(llir_ast_print_unknown_binary)
 	END;
 }
 
-TEST(llir_ast_print_phi_without_args)
+TEST(llir_hlir_print_phi_without_args)
 {
 	START;
 
@@ -1431,7 +1441,7 @@ TEST(llir_ast_print_phi_without_args)
 
 	char out[128] = {0};
 	dst_t dst = DST_BUF(out);
-	size_t len = ast_print(&cflow, &ssa, &expr, NULL, NULL, dst);
+	size_t len = hlir_print(&cflow, &ssa, &expr, NULL, NULL, dst);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("0 /* phi */")), 1);
 
@@ -1442,7 +1452,7 @@ TEST(llir_ast_print_phi_without_args)
 	END;
 }
 
-TEST(llir_ast_print_terminal_if)
+TEST(llir_hlir_print_terminal_if)
 {
 	START;
 
@@ -1476,7 +1486,7 @@ TEST(llir_ast_print_terminal_if)
 
 	char out[128] = {0};
 	dst_t dst = DST_BUF(out);
-	size_t len = ast_print(&cflow, &ssa, &expr, NULL, NULL, dst);
+	size_t len = hlir_print(&cflow, &ssa, &expr, NULL, NULL, dst);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("if (")), 1);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("goto block1;")), 1);
@@ -1488,7 +1498,7 @@ TEST(llir_ast_print_terminal_if)
 	END;
 }
 
-TEST(llir_ast_print_loop_structuring)
+TEST(llir_hlir_print_loop_structuring)
 {
 	START;
 
@@ -1538,7 +1548,7 @@ TEST(llir_ast_print_loop_structuring)
 
 	char out[256] = {0};
 	dst_t dst = DST_BUF(out);
-	size_t len = ast_print(&cflow, &ssa, &expr, NULL, NULL, dst);
+	size_t len = hlir_print(&cflow, &ssa, &expr, NULL, NULL, dst);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("while (")), 1);
 
@@ -1549,7 +1559,7 @@ TEST(llir_ast_print_loop_structuring)
 	END;
 }
 
-TEST(llir_ast_print_if_else_structuring)
+TEST(llir_hlir_print_if_else_structuring)
 {
 	START;
 
@@ -1606,7 +1616,7 @@ TEST(llir_ast_print_if_else_structuring)
 
 	char out[256] = {0};
 	dst_t dst = DST_BUF(out);
-	size_t len = ast_print(&cflow, &ssa, &expr, NULL, NULL, dst);
+	size_t len = hlir_print(&cflow, &ssa, &expr, NULL, NULL, dst);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("} else {")), 1);
 
@@ -1617,31 +1627,133 @@ TEST(llir_ast_print_if_else_structuring)
 	END;
 }
 
-STEST(llir_ast)
+TEST(llir_hlir_semantic_folds)
+{
+	START;
+
+	llir_ssa_t ssa = {0};
+	llir_expr_t expr = {0};
+	llir_cflow_t cflow = {0};
+	llir_vars_t vars = {0};
+	llir_types_t types = {0};
+
+	EXPECT_NE(llir_ssa_init(&ssa, ALLOC_STD), NULL);
+	EXPECT_NE(llir_expr_init(&expr, 8, ALLOC_STD), NULL);
+	EXPECT_NE(llir_cflow_init(&cflow, 2, ALLOC_STD), NULL);
+	EXPECT_NE(llir_vars_init(&vars, 4, ALLOC_STD), NULL);
+	EXPECT_NE(llir_types_init(&types, 4, ALLOC_STD), NULL);
+
+	EXPECT_NE(t_c_add_ssa_block(&ssa), UINT_MAX);
+	EXPECT_NE(t_c_add_ssa_block(&ssa), UINT_MAX);
+
+	EXPECT_NE(t_c_add_expr_block(&expr, 0), UINT_MAX);
+	EXPECT_NE(t_c_add_expr_block(&expr, 1), UINT_MAX);
+
+	EXPECT_NE(t_c_add_cflow_block(&cflow), UINT_MAX);
+	EXPECT_NE(t_c_add_cflow_block(&cflow), UINT_MAX);
+
+	EXPECT_NE(t_c_add_var(&vars, LLIR_REG_A, 8, 0, 0), NULL);
+	EXPECT_NE(t_c_add_var(&vars, LLIR_REG_B, 8, 0, 0), NULL);
+	EXPECT_NE(t_c_add_var(&vars, LLIR_REG_DPTR, 16, 0, 0), NULL);
+
+	EXPECT_NE(t_c_add_type_var(&types, LLIR_REG_A, 8, 0, 0, LLIR_TYPE_U8), NULL);
+	EXPECT_NE(t_c_add_type_var(&types, LLIR_REG_B, 8, 0, 0, LLIR_TYPE_U8), NULL);
+
+	uint n_const5 = t_c_add_expr_node(&expr, (llir_expr_node_t){.type = LLIR_EXPR_NODE_CONST, .val = {.addr = LLIR_ADDR_IMM, .data = 5, .size = 8}});
+	uint n_a = t_c_add_expr_node(&expr, (llir_expr_node_t){.type = LLIR_EXPR_NODE_REF, .val = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_A, .size = 8}});
+	uint n_dptr = t_c_add_expr_node(&expr, (llir_expr_node_t){.type = LLIR_EXPR_NODE_REF, .val = {.addr = LLIR_ADDR_XRAM_REG, .data = LLIR_REG_DPTR, .size = 16}});
+	uint n_dptr_reg = t_c_add_expr_node(&expr, (llir_expr_node_t){.type = LLIR_EXPR_NODE_REF, .val = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_DPTR, .size = 16}});
+	uint n_a_ref = t_c_add_expr_node(&expr, (llir_expr_node_t){.type = LLIR_EXPR_NODE_REF, .val = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_A, .size = 8}});
+	uint n_const1 = t_c_add_expr_node(&expr, (llir_expr_node_t){.type = LLIR_EXPR_NODE_CONST, .val = {.addr = LLIR_ADDR_IMM, .data = 1, .size = 8}});
+	uint n_const0 = t_c_add_expr_node(&expr, (llir_expr_node_t){.type = LLIR_EXPR_NODE_CONST, .val = {.addr = LLIR_ADDR_IMM, .data = 0, .size = 8}});
+	uint n_b = t_c_add_expr_node(&expr, (llir_expr_node_t){.type = LLIR_EXPR_NODE_REF, .val = {.addr = LLIR_ADDR_REG, .data = LLIR_REG_B, .size = 8}});
+	uint n_shift1 = t_c_add_expr_node(&expr, (llir_expr_node_t){.type = LLIR_EXPR_NODE_BINARY, .op = LLIR_EXPR_OP_RSHIFT, .lhs = n_b, .rhs = n_const1});
+	uint n_shift2 = t_c_add_expr_node(&expr, (llir_expr_node_t){.type = LLIR_EXPR_NODE_BINARY, .op = LLIR_EXPR_OP_RSHIFT, .lhs = n_shift1, .rhs = n_const1});
+	EXPECT_NE(n_const5, UINT_MAX);
+	EXPECT_NE(n_a, UINT_MAX);
+	EXPECT_NE(n_dptr, UINT_MAX);
+	EXPECT_NE(n_dptr_reg, UINT_MAX);
+	EXPECT_NE(n_a_ref, UINT_MAX);
+	EXPECT_NE(n_const1, UINT_MAX);
+	EXPECT_NE(n_const0, UINT_MAX);
+	EXPECT_NE(n_b, UINT_MAX);
+	EXPECT_NE(n_shift1, UINT_MAX);
+	EXPECT_NE(n_shift2, UINT_MAX);
+
+	uint s0 = t_c_add_expr_stmt(&expr, (llir_expr_stmt_t){.kind = LLIR_EXPR_STMT_ASSIGN, .lhs = n_a, .rhs = n_const5});
+	uint s1 = t_c_add_expr_stmt(&expr, (llir_expr_stmt_t){.kind = LLIR_EXPR_STMT_ASSIGN, .lhs = n_dptr, .rhs = n_a_ref});
+	uint s2 = t_c_add_expr_stmt(&expr, (llir_expr_stmt_t){.kind = LLIR_EXPR_STMT_BIN_ASSIGN, .op = {.type = LLIR_OP_ADD}, .lhs = n_dptr_reg, .rhs = n_const1});
+	uint s3 = t_c_add_expr_stmt(&expr, (llir_expr_stmt_t){.kind = LLIR_EXPR_STMT_ASSIGN, .lhs = n_a, .rhs = n_const0});
+	uint s4 = t_c_add_expr_stmt(&expr, (llir_expr_stmt_t){.kind = LLIR_EXPR_STMT_ASSIGN, .lhs = n_dptr, .rhs = n_a_ref});
+	uint s5 = t_c_add_expr_stmt(&expr, (llir_expr_stmt_t){.kind = LLIR_EXPR_STMT_ASSIGN, .lhs = n_a, .rhs = n_shift2});
+	EXPECT_NE(s0, UINT_MAX);
+	EXPECT_NE(s1, UINT_MAX);
+	EXPECT_NE(s2, UINT_MAX);
+	EXPECT_NE(s3, UINT_MAX);
+	EXPECT_NE(s4, UINT_MAX);
+	EXPECT_NE(s5, UINT_MAX);
+
+	llir_expr_block_t *b0 = arr_get(&expr.blocks, 0);
+	llir_expr_block_t *b1 = arr_get(&expr.blocks, 1);
+	llir_cflow_block_t *c0 = arr_get(&cflow.blocks, 0);
+	llir_cflow_block_t *c1 = arr_get(&cflow.blocks, 1);
+	EXPECT_NE(b0, NULL);
+	EXPECT_NE(b1, NULL);
+	EXPECT_NE(c0, NULL);
+	EXPECT_NE(c1, NULL);
+	EXPECT_EQ(t_c_add_stmt_id(b0, s0), 0);
+	EXPECT_EQ(t_c_add_stmt_id(b0, s1), 0);
+	EXPECT_EQ(t_c_add_stmt_id(b0, s2), 0);
+	EXPECT_EQ(t_c_add_stmt_id(b0, s3), 0);
+	EXPECT_EQ(t_c_add_stmt_id(b0, s4), 0);
+	EXPECT_EQ(t_c_add_stmt_id(b1, s5), 0);
+
+	c0->kind = LLIR_CFLOW_BLOCK_LINEAR;
+	c0->then_block = 1;
+	c1->kind = LLIR_CFLOW_BLOCK_TERMINAL;
+
+	char out[256] = {0};
+	dst_t dst = DST_BUF(out);
+	size_t len = llir_hlir_print(&cflow, &ssa, &expr, &vars, &types, dst);
+	EXPECT_GT(len, 0);
+	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("store_u16_le(xram, DPTR, 0x0005);")), 1);
+	EXPECT_EQ(t_c_str_contains(STRVN(out, len), STRV("A = (B >> 0x02);")), 1);
+
+	llir_types_free(&types);
+	llir_vars_free(&vars);
+	llir_cflow_free(&cflow);
+	llir_expr_free(&expr);
+	llir_ssa_free(&ssa);
+
+	END;
+}
+
+STEST(llir_hlir)
 {
 	SSTART;
 
-	RUN(llir_ast_api_null_safety);
-	RUN(llir_ast_print_api_null_safety);
-	RUN(llir_ast_print_no_vars);
-	RUN(llir_ast_print_type_fallback);
-	RUN(llir_ast_print_type_lookup_miss);
-	RUN(llir_ast_gen_oom_block_vars);
-	RUN(llir_ast_gen_oom_loop_node);
-	RUN(llir_ast_print_binary_operator_text);
-	RUN(llir_ast_print_exhaustive);
-	RUN(llir_ast_print_control_flow_paths);
-	RUN(llir_ast_print_fallback_nodes);
-	RUN(llir_ast_print_unknown_unary);
-	RUN(llir_ast_print_unknown_binary);
-	RUN(llir_ast_print_phi_without_args);
-	RUN(llir_ast_print_terminal_if);
-	RUN(llir_ast_print_loop_structuring);
-	RUN(llir_ast_print_if_else_structuring);
-	RUN(llir_ast_print_unknown_stmt_kind);
-	RUN(llir_ast_gen_oom_setup_paths);
-	RUN(llir_ast_gen_oom_text_reuse);
-	RUN(llir_ast_gen_invalid_block_guard);
+	RUN(llir_hlir_api_null_safety);
+	RUN(llir_hlir_print_api_null_safety);
+	RUN(llir_hlir_print_no_vars);
+	RUN(llir_hlir_print_type_fallback);
+	RUN(llir_hlir_print_type_lookup_miss);
+	RUN(llir_hlir_gen_oom_block_vars);
+	RUN(llir_hlir_gen_oom_loop_node);
+	RUN(llir_hlir_print_binary_operator_text);
+	RUN(llir_hlir_print_exhaustive);
+	RUN(llir_hlir_print_control_flow_paths);
+	RUN(llir_hlir_print_fallback_nodes);
+	RUN(llir_hlir_print_unknown_unary);
+	RUN(llir_hlir_print_unknown_binary);
+	RUN(llir_hlir_print_phi_without_args);
+	RUN(llir_hlir_print_terminal_if);
+	RUN(llir_hlir_print_loop_structuring);
+	RUN(llir_hlir_print_if_else_structuring);
+	RUN(llir_hlir_print_unknown_stmt_kind);
+	RUN(llir_hlir_gen_oom_setup_paths);
+	RUN(llir_hlir_gen_oom_text_reuse);
+	RUN(llir_hlir_gen_invalid_block_guard);
+	RUN(llir_hlir_semantic_folds);
 
 	SEND;
 }

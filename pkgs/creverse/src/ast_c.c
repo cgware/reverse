@@ -53,6 +53,21 @@ static int ast_c_text_eq(const ast_node_t *node, strv_t text)
 	return node != NULL && node->text.data != NULL && node->text.len == text.len && strv_eq(STRVS(node->text), text);
 }
 
+static int ast_c_text_has_char(const ast_node_t *node, char ch)
+{
+	if (node == NULL || node->text.data == NULL) {
+		return 0;
+	}
+
+	for (size_t i = 0; i < node->text.len; i++) {
+		if (node->text.data[i] == ch) {
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
 static size_t ast_c_print_expr(const ast_t *ast, tree_node_t node, dst_t dst)
 {
 	const ast_node_t *data = ast_get(ast, node);
@@ -285,7 +300,12 @@ static size_t ast_c_print_stmt(const ast_t *ast, tree_node_t node, uint indent, 
 		break;
 	case AST_KIND_STMT_CALL:
 		dst.off += ast_c_print_indent(indent, dst);
-		dst.off += dputf(dst, "call_%s();\n", data->text.data != NULL ? data->text.data : "0x0000");
+		if (ast_c_text_has_char(data, '(')) {
+			dst.off += dputs(dst, STRVS(data->text));
+			dst.off += dputf(dst, ";\n");
+		} else {
+			dst.off += dputf(dst, "call_%s();\n", data->text.data != NULL ? data->text.data : "0x0000");
+		}
 		break;
 	case AST_KIND_STMT_RETURN:
 		dst.off += ast_c_print_indent(indent, dst);

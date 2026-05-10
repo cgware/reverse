@@ -10,7 +10,9 @@
 #include "llir.h"
 #include "llir_expr.h"
 #include "llir_asmc.h"
-#include "llir_ast.h"
+#include "llir_hlir.h"
+#include "hlir.h"
+#include "hlir_ast.h"
 #include "ast.h"
 #include "ast_c.h"
 #include "llir_cflow.h"
@@ -158,6 +160,22 @@ static int print_c_ast_file(fs_t *fs, const ast_t *ast, strv_t path)
 	return 0;
 }
 
+static int print_hlir_file(fs_t *fs, const hlir_t *hlir, strv_t path)
+{
+	if (ensure_out_dir(fs)) {
+		return 1;
+	}
+
+	void *file = NULL;
+	if (fs_open(fs, path, "w", &file)) {
+		return 1;
+	}
+
+	hlir_print(hlir, DST_FS(fs, file));
+	fs_close(fs, file);
+	return 0;
+}
+
 static int print_bin_output(fs_t *fs, const bin_t *bin);
 
 typedef struct reverse_pipeline_s {
@@ -240,7 +258,6 @@ static int reverse_pass_llir_ssa(reverse_pipeline_t *pipeline)
 static int reverse_pass_recovery(reverse_pipeline_t *pipeline)
 {
 	llir_types_t types_clean = {0};
-	ast_t c_ast = {0};
 
 	log_info("reverse", "main", NULL, "Step: SSA -> EXPR");
 	if (llir_expr_gen(pipeline->expr, pipeline->ssa)) {
@@ -315,13 +332,36 @@ static int reverse_pass_recovery(reverse_pipeline_t *pipeline)
 		return 1;
 	}
 
-	log_info("reverse", "main", NULL, "Step: LLIR -> AST");
-	if (ast_init(&c_ast) == NULL) {
+	hlir_t hlir = {0};
+	ast_t c_ast = {0};
+
+	log_info("reverse", "main", NULL, "Step: LLIR -> HLIR");
+	if (hlir_init(&hlir) == NULL) {
 		llir_types_free(&types_clean);
 		return 1;
 	}
-	if (llir_ast_gen(&c_ast, pipeline->cflow, pipeline->ssa, pipeline->expr, pipeline->vars, &types_clean)) {
+	if (llir_hlir_gen(&hlir, pipeline->cflow, pipeline->ssa, pipeline->expr, pipeline->vars, &types_clean)) {
+		hlir_free(&hlir);
+		llir_types_free(&types_clean);
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: write HLIR to out/main.hlir");
+	if (print_hlir_file(pipeline->fs, &hlir, STRV("out/main.hlir"))) {
+		hlir_free(&hlir);
+		llir_types_free(&types_clean);
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: HLIR -> AST");
+	if (ast_init(&c_ast) == NULL) {
+		hlir_free(&hlir);
+		llir_types_free(&types_clean);
+		return 1;
+	}
+	if (hlir_ast_gen(&c_ast, &hlir)) {
 		ast_free(&c_ast);
+		hlir_free(&hlir);
 		llir_types_free(&types_clean);
 		return 1;
 	}
@@ -329,11 +369,13 @@ static int reverse_pass_recovery(reverse_pipeline_t *pipeline)
 	log_info("reverse", "main", NULL, "Step: AST -> C");
 	if (print_c_ast_file(pipeline->fs, &c_ast, STRV("out/main.c"))) {
 		ast_free(&c_ast);
+		hlir_free(&hlir);
 		llir_types_free(&types_clean);
 		return 1;
 	}
 
 	ast_free(&c_ast);
+	hlir_free(&hlir);
 	llir_types_free(&types_clean);
 	return 0;
 }
