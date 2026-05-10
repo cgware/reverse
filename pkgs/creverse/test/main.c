@@ -5,6 +5,7 @@
 STEST(arch);
 STEST(asmc);
 STEST(asmc_bin);
+STEST(asmc_llir);
 STEST(format);
 STEST(format_elf);
 STEST(format_rtl8373n);
@@ -13,16 +14,7 @@ STEST(gen_asm_8051);
 STEST(gen_asm_x86);
 STEST(image);
 STEST(llir);
-STEST(ast);
-STEST(llir_expr);
 STEST(llir_asmc);
-STEST(llir_ast);
-STEST(ast_c);
-STEST(llir_cflow);
-STEST(asmc_llir);
-STEST(llir_types);
-STEST(llir_vars);
-STEST(llir_ssa);
 STEST(parse_8051);
 STEST(parse_x86);
 
@@ -33,6 +25,7 @@ TEST(creverse)
 	RUN(arch);
 	RUN(asmc);
 	RUN(asmc_bin);
+	RUN(asmc_llir);
 	RUN(format);
 	RUN(format_elf);
 	RUN(format_rtl8373n);
@@ -41,16 +34,7 @@ TEST(creverse)
 	RUN(gen_asm_x86);
 	RUN(image);
 	RUN(llir);
-	RUN(ast);
-	RUN(llir_expr);
 	RUN(llir_asmc);
-	RUN(llir_ast);
-	RUN(ast_c);
-	RUN(llir_cflow);
-	RUN(asmc_llir);
-	RUN(llir_types);
-	RUN(llir_vars);
-	RUN(llir_ssa);
 	RUN(parse_8051);
 	RUN(parse_x86);
 
