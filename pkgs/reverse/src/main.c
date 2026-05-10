@@ -158,6 +158,215 @@ static int print_c_ast_file(fs_t *fs, const ast_t *ast, strv_t path)
 	return 0;
 }
 
+static int print_bin_output(fs_t *fs, const bin_t *bin);
+
+typedef struct reverse_pipeline_s {
+	fs_t *fs;
+	const format_driver_t *format_drv;
+	const gen_asm_driver_t *asm_drv;
+	llir_t *llir;
+	const asmc_t *asmc;
+	asmc_llir_ctx_t *asmc_ctx;
+	bin_t *bin;
+	bin_t *bin_out;
+	llir_ssa_t *ssa;
+	llir_expr_t *expr;
+	llir_vars_t *vars;
+	llir_cflow_t *cflow;
+	llir_types_t *types;
+	asmc_t *asmc_out;
+	uint llir_cap;
+} reverse_pipeline_t;
+
+typedef int (*reverse_pass_fn_t)(reverse_pipeline_t *pipeline);
+
+typedef struct reverse_pass_s {
+	strv_t name;
+	reverse_pass_fn_t fn;
+} reverse_pass_t;
+
+static int reverse_pass_run(const reverse_pass_t *pass, reverse_pipeline_t *pipeline)
+{
+	if (pass == NULL || pass->fn == NULL || pipeline == NULL) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: %.*s", (int)pass->name.len, pass->name.data);
+	return pass->fn(pipeline);
+}
+
+static int reverse_pass_run_all(const reverse_pass_t *passes, size_t cnt, reverse_pipeline_t *pipeline)
+{
+	for (size_t i = 0; i < cnt; i++) {
+		int ret = reverse_pass_run(&passes[i], pipeline);
+		if (ret) {
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+static int reverse_pass_llir_ssa(reverse_pipeline_t *pipeline)
+{
+	log_info("reverse", "main", NULL, "Step: ASMC -> LLIR");
+	asmc_llir(pipeline->llir, pipeline->asmc_ctx, pipeline->asmc);
+	log_info("reverse", "main", NULL, "Step: LLIR blocks");
+	llir_blocks(pipeline->llir);
+	log_info("reverse", "main", NULL, "Step: write LLIR to out/main.llir");
+	if (print_llir_output(pipeline->fs, pipeline->llir)) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: LLIR -> SSA");
+	if (llir_ssa_gen(pipeline->ssa, pipeline->llir)) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: write SSA to out/main.llir_ssa");
+	if (print_llir_ssa_file(pipeline->fs, pipeline->ssa, STRV("out/main.llir_ssa"))) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: simplify SSA");
+	if (llir_ssa_simplify(pipeline->ssa)) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: write simplified SSA to out/main.llir_ssa_simplified");
+	return print_llir_ssa_file(pipeline->fs, pipeline->ssa, STRV("out/main.llir_ssa_simplified"));
+}
+
+static int reverse_pass_recovery(reverse_pipeline_t *pipeline)
+{
+	llir_types_t types_clean = {0};
+	ast_t c_ast = {0};
+
+	log_info("reverse", "main", NULL, "Step: SSA -> EXPR");
+	if (llir_expr_gen(pipeline->expr, pipeline->ssa)) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: write expressions to out/main.llir_expr");
+	if (print_llir_expr_file(pipeline->fs, pipeline->expr, STRV("out/main.llir_expr"))) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: EXPR -> VARS");
+	if (llir_vars_gen(pipeline->vars, pipeline->expr)) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: write recovered variables to out/main.llir_vars");
+	if (print_llir_vars_file(pipeline->fs, pipeline->vars, pipeline->expr, STRV("out/main.llir_vars"))) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: EXPR -> CFLOW");
+	if (llir_cflow_gen(pipeline->cflow, pipeline->ssa, pipeline->expr)) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: write structured control flow to out/main.llir_cflow");
+	if (print_llir_cflow_file(pipeline->fs, pipeline->cflow, pipeline->ssa, pipeline->expr, pipeline->vars, STRV("out/main.llir_cflow"))) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: EXPR -> TYPES");
+	if (llir_types_gen(pipeline->types, pipeline->expr, pipeline->vars, pipeline->cflow)) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: write recovered types to out/main.llir_types");
+	if (print_llir_types_file(pipeline->fs, pipeline->types, STRV("out/main.llir_types"))) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: cleanup recovered data");
+	if (llir_expr_cleanup(pipeline->expr)) {
+		return 1;
+	}
+	if (llir_vars_cleanup(pipeline->vars, pipeline->expr)) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: write cleaned expressions to out/main.llir_expr_clean");
+	if (print_llir_expr_file(pipeline->fs, pipeline->expr, STRV("out/main.llir_expr_clean"))) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: write cleaned variables to out/main.llir_vars_clean");
+	if (print_llir_vars_file(pipeline->fs, pipeline->vars, pipeline->expr, STRV("out/main.llir_vars_clean"))) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: cleanup -> TYPES");
+	if (llir_types_init(&types_clean, pipeline->llir_cap, ALLOC_STD) == NULL) {
+		return 1;
+	}
+	if (llir_types_gen(&types_clean, pipeline->expr, pipeline->vars, pipeline->cflow)) {
+		llir_types_free(&types_clean);
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: write cleaned types to out/main.llir_types_clean");
+	if (print_llir_types_file(pipeline->fs, &types_clean, STRV("out/main.llir_types_clean"))) {
+		llir_types_free(&types_clean);
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: LLIR -> AST");
+	if (ast_init(&c_ast) == NULL) {
+		llir_types_free(&types_clean);
+		return 1;
+	}
+	if (llir_ast_gen(&c_ast, pipeline->cflow, pipeline->ssa, pipeline->expr, pipeline->vars, &types_clean)) {
+		ast_free(&c_ast);
+		llir_types_free(&types_clean);
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: AST -> C");
+	if (print_c_ast_file(pipeline->fs, &c_ast, STRV("out/main.c"))) {
+		ast_free(&c_ast);
+		llir_types_free(&types_clean);
+		return 1;
+	}
+
+	ast_free(&c_ast);
+	llir_types_free(&types_clean);
+	return 0;
+}
+
+static int reverse_pass_llir_asmc(reverse_pipeline_t *pipeline)
+{
+	log_info("reverse", "main", NULL, "Step: LLIR -> ASMC");
+	if (llir_asmc(pipeline->llir, pipeline->asmc_ctx, pipeline->asmc_out)) {
+		return 1;
+	}
+
+	const gen_asm_driver_t *asm_drv = pipeline->asm_drv;
+	if (asm_drv == NULL) {
+		log_error("reverse", "main", NULL, "Failed to detect assembly generator driver");
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: write ASMC to out/main.s (%.*s)", (int)asm_drv->name.len, asm_drv->name.data);
+	return print_asm_output(pipeline->fs, asm_drv, pipeline->asmc_out);
+}
+
+static int reverse_pass_asmc_bin(reverse_pipeline_t *pipeline)
+{
+	log_info("reverse", "main", NULL, "Step: ASMC -> FORMAT (%.*s)", (int)pipeline->format_drv->name.len, pipeline->format_drv->name.data);
+	if (format_emit_bin(pipeline->format_drv, pipeline->asmc_out, pipeline->bin_out, pipeline->bin)) {
+		return 1;
+	}
+
+	log_info("reverse", "main", NULL, "Step: FORMAT -> BIN (%.*s)", (int)pipeline->format_drv->name.len, pipeline->format_drv->name.data);
+	log_info("reverse", "main", NULL, "Step: write BIN to out/main.bin");
+	return print_bin_output(pipeline->fs, pipeline->bin_out);
+}
+
 static int print_bin_output(fs_t *fs, const bin_t *bin)
 {
 	if (ensure_out_dir(fs)) {
@@ -313,12 +522,17 @@ int main(int argc, const char **argv)
 
 	int ret		= 0;
 	int asmc_ready	= 0;
-	int asmc_llir_ready = 0;
 	int bin_ready	= 0;
 	int bin_out_ready = 0;
 	int image_ready = 0;
 	int llir_ready	= 0;
 	int llir_asmc_ready = 0;
+	int asmc_out_ready = 0;
+	int ssa_ready = 0;
+	int expr_ready = 0;
+	int vars_ready = 0;
+	int cflow_ready = 0;
+	int types_ready = 0;
 
 	fs_t fs = {0};
 	fs_init(&fs, 0, 0, ALLOC_STD);
@@ -335,10 +549,14 @@ int main(int argc, const char **argv)
 		asmc_ready = 1;
 	}
 
-	asmc_t asmc_out = {0};
-
 	llir_t llir = {0};
 	asmc_llir_ctx_t asmc_ctx = {0};
+	llir_ssa_t ssa = {0};
+	llir_expr_t expr = {0};
+	llir_vars_t vars = {0};
+	llir_cflow_t cflow = {0};
+	llir_types_t types = {0};
+	asmc_t asmc_out = {0};
 
 	bin_t bin = {0};
 	if (ret == 0 && bin_init(&bin, 28400, ALLOC_STD) == NULL) {
@@ -413,165 +631,60 @@ int main(int argc, const char **argv)
 				ret = 1;
 			} else if (ret == 0 && asmc_llir_ctx_init(&asmc_ctx, llir_cap, ALLOC_STD) == NULL) {
 				ret = 1;
+			} else if (ret == 0 && llir_ssa_init(&ssa, ALLOC_STD) == NULL) {
+				ret = 1;
+			} else if (ret == 0 && llir_expr_init(&expr, llir_cap, ALLOC_STD) == NULL) {
+				ret = 1;
+			} else if (ret == 0 && llir_vars_init(&vars, llir_cap, ALLOC_STD) == NULL) {
+				ret = 1;
+			} else if (ret == 0 && llir_cflow_init(&cflow, llir_cap, ALLOC_STD) == NULL) {
+				ret = 1;
+			} else if (ret == 0 && llir_types_init(&types, llir_cap, ALLOC_STD) == NULL) {
+				ret = 1;
+			} else if (ret == 0 && asmc_init(&asmc_out, llir_cap, ALLOC_STD) == NULL) {
+				ret = 1;
 			} else if (ret == 0) {
 				llir_ready = 1;
 				llir_asmc_ready = 1;
-				log_info("reverse", "main", NULL, "Step: ASMC -> LLIR");
-				asmc_llir(&llir, &asmc_ctx, &asmc);
-				log_info("reverse", "main", NULL, "Step: LLIR blocks");
-				llir_blocks(&llir);
-				log_info("reverse", "main", NULL, "Step: write LLIR to out/main.llir");
-				ret = print_llir_output(&fs, &llir);
-				if (ret == 0) {
-					log_info("reverse", "main", NULL, "Step: LLIR -> SSA");
-					llir_ssa_t ssa = {0};
-					if (llir_ssa_init(&ssa, ALLOC_STD) == NULL) {
-						ret = 1;
-					} else {
-						ret = llir_ssa_gen(&ssa, &llir);
-						if (ret == 0) {
-							log_info("reverse", "main", NULL, "Step: write SSA to out/main.llir_ssa");
-							ret = print_llir_ssa_file(&fs, &ssa, STRV("out/main.llir_ssa"));
-						}
-						if (ret == 0) {
-							log_info("reverse", "main", NULL, "Step: simplify SSA");
-							ret = llir_ssa_simplify(&ssa);
-						}
-						if (ret == 0) {
-							log_info("reverse", "main", NULL, "Step: write simplified SSA to out/main.llir_ssa_simplified");
-							ret = print_llir_ssa_file(&fs, &ssa, STRV("out/main.llir_ssa_simplified"));
-						}
-						if (ret == 0) {
-							log_info("reverse", "main", NULL, "Step: SSA -> EXPR");
-							llir_expr_t expr = {0};
-							if (llir_expr_init(&expr, llir_cap, ALLOC_STD) == NULL) {
-								ret = 1;
-							} else {
-								ret = llir_expr_gen(&expr, &ssa);
-								if (ret == 0) {
-									log_info("reverse", "main", NULL, "Step: write expressions to out/main.llir_expr");
-									ret = print_llir_expr_file(&fs, &expr, STRV("out/main.llir_expr"));
-								}
-							}
-						if (ret == 0) {
-							log_info("reverse", "main", NULL, "Step: EXPR -> VARS");
-							llir_vars_t vars = {0};
-							if (llir_vars_init(&vars, llir_cap, ALLOC_STD) == NULL) {
-								ret = 1;
-							} else {
-								ret = llir_vars_gen(&vars, &expr);
-								if (ret == 0) {
-									log_info("reverse", "main", NULL, "Step: write recovered variables to out/main.llir_vars");
-									ret = print_llir_vars_file(&fs, &vars, &expr, STRV("out/main.llir_vars"));
-								}
-								if (ret == 0) {
-									log_info("reverse", "main", NULL, "Step: EXPR -> CFLOW");
-									llir_cflow_t cflow = {0};
-									if (llir_cflow_init(&cflow, llir_cap, ALLOC_STD) == NULL) {
-										ret = 1;
-									} else {
-										ret = llir_cflow_gen(&cflow, &ssa, &expr);
-										if (ret == 0) {
-											log_info("reverse", "main", NULL, "Step: write structured control flow to out/main.llir_cflow");
-											ret = print_llir_cflow_file(&fs, &cflow, &ssa, &expr, &vars, STRV("out/main.llir_cflow"));
-										}
-										if (ret == 0) {
-											log_info("reverse", "main", NULL, "Step: EXPR -> TYPES");
-											llir_types_t types = {0};
-											if (llir_types_init(&types, llir_cap, ALLOC_STD) == NULL) {
-												ret = 1;
-											} else {
-												ret = llir_types_gen(&types, &expr, &vars, &cflow);
-												if (ret == 0) {
-													log_info("reverse", "main", NULL, "Step: write recovered types to out/main.llir_types");
-													ret = print_llir_types_file(&fs, &types, STRV("out/main.llir_types"));
-												}
-												llir_types_free(&types);
-											}
-										}
-										if (ret == 0) {
-											log_info("reverse", "main", NULL, "Step: cleanup recovered data");
-											ret = llir_expr_cleanup(&expr);
-										}
-										if (ret == 0) {
-											ret = llir_vars_cleanup(&vars, &expr);
-										}
-										if (ret == 0) {
-											log_info("reverse", "main", NULL, "Step: write cleaned expressions to out/main.llir_expr_clean");
-											ret = print_llir_expr_file(&fs, &expr, STRV("out/main.llir_expr_clean"));
-										}
-										if (ret == 0) {
-											log_info("reverse", "main", NULL, "Step: write cleaned variables to out/main.llir_vars_clean");
-											ret = print_llir_vars_file(&fs, &vars, &expr, STRV("out/main.llir_vars_clean"));
-										}
-										if (ret == 0) {
-											log_info("reverse", "main", NULL, "Step: cleanup -> TYPES");
-											llir_types_t types_clean = {0};
-											if (llir_types_init(&types_clean, llir_cap, ALLOC_STD) == NULL) {
-												ret = 1;
-											} else {
-												ret = llir_types_gen(&types_clean, &expr, &vars, &cflow);
-												if (ret == 0) {
-													log_info("reverse", "main", NULL, "Step: write cleaned types to out/main.llir_types_clean");
-													ret = print_llir_types_file(&fs, &types_clean, STRV("out/main.llir_types_clean"));
-												}
-											if (ret == 0) {
-												log_info("reverse", "main", NULL, "Step: LLIR -> AST");
-												ast_t c_ast = {0};
-												if (ast_init(&c_ast) == NULL) {
-													ret = 1;
-												} else {
-													ret = llir_ast_gen(&c_ast, &cflow, &ssa, &expr, &vars, &types_clean);
-													if (ret == 0) {
-														log_info("reverse", "main", NULL, "Step: AST -> C");
-														ret = print_c_ast_file(&fs, &c_ast, STRV("out/main.c"));
-														}
-														ast_free(&c_ast);
-													}
-												}
-												llir_types_free(&types_clean);
-											}
-										}
-										llir_cflow_free(&cflow);
-									}
-								}
-								llir_vars_free(&vars);
-							}
-						}
-							llir_expr_free(&expr);
-						}
-						llir_ssa_free(&ssa);
-					}
-				}
-			}
-			if (ret == 0) {
-				uint asmc_llir_cap = asmc.ops.cnt == 0 ? 1 : asmc.ops.cnt;
-				if (asmc_init(&asmc_out, asmc_llir_cap, ALLOC_STD) == NULL) {
-					ret = 1;
-				} else {
-					asmc_llir_ready = 1;
-					log_info("reverse", "main", NULL, "Step: LLIR -> ASMC");
-					ret = llir_asmc(&llir, &asmc_ctx, &asmc_out);
-				}
-			}
-			if (ret == 0) {
+				ssa_ready = 1;
+				expr_ready = 1;
+				vars_ready = 1;
+				cflow_ready = 1;
+				types_ready = 1;
+				asmc_out_ready = 1;
+
+				reverse_pipeline_t pipeline = {
+					.fs = &fs,
+					.format_drv = format_drv,
+					.asm_drv = NULL,
+					.llir = &llir,
+					.asmc = &asmc,
+					.asmc_ctx = &asmc_ctx,
+					.bin = &bin,
+					.bin_out = &bin_out,
+					.ssa = &ssa,
+					.expr = &expr,
+					.vars = &vars,
+					.cflow = &cflow,
+					.types = &types,
+					.asmc_out = &asmc_out,
+					.llir_cap = llir_cap,
+				};
+
 				gen_asm_driver_t *asm_drv = asm_gen == 0 ? gen_asm_driver_find(arch_drv->name) : asm_drivers[asm_gen].priv;
 				if (asm_drv == NULL) {
 					log_error("reverse", "main", NULL, "Failed to detect assembly generator driver");
 					ret = 1;
 				} else {
-					log_info("reverse", "main", NULL, "Step: write ASMC to out/main.s (%.*s)", (int)asm_drv->name.len, asm_drv->name.data);
-					ret = print_asm_output(&fs, asm_drv, &asmc_out);
+					pipeline.asm_drv = asm_drv;
+					reverse_pass_t passes[] = {
+						{ .name = STRV("ASMC -> LLIR -> SSA"), .fn = reverse_pass_llir_ssa },
+						{ .name = STRV("SSA -> RECOVERY -> AST -> C"), .fn = reverse_pass_recovery },
+						{ .name = STRV("LLIR -> ASMC"), .fn = reverse_pass_llir_asmc },
+						{ .name = STRV("ASMC -> FORMAT -> BIN"), .fn = reverse_pass_asmc_bin },
+					};
+					ret = reverse_pass_run_all(passes, sizeof(passes) / sizeof(passes[0]), &pipeline);
 				}
-			}
-			if (ret == 0) {
-				log_info("reverse", "main", NULL, "Step: ASMC -> FORMAT (%.*s)", (int)format_drv->name.len, format_drv->name.data);
-				ret = format_emit_bin(format_drv, &asmc_out, &bin_out, &bin);
-			}
-			if (ret == 0) {
-				log_info("reverse", "main", NULL, "Step: FORMAT -> BIN (%.*s)", (int)format_drv->name.len, format_drv->name.data);
-				log_info("reverse", "main", NULL, "Step: write BIN to out/main.bin");
-				ret = print_bin_output(&fs, &bin_out);
 			}
 		}
 	}
@@ -581,6 +694,21 @@ int main(int argc, const char **argv)
 	}
 	if (llir_asmc_ready) {
 		asmc_llir_ctx_free(&asmc_ctx);
+	}
+	if (ssa_ready) {
+		llir_ssa_free(&ssa);
+	}
+	if (expr_ready) {
+		llir_expr_free(&expr);
+	}
+	if (vars_ready) {
+		llir_vars_free(&vars);
+	}
+	if (cflow_ready) {
+		llir_cflow_free(&cflow);
+	}
+	if (types_ready) {
+		llir_types_free(&types);
 	}
 	if (image_ready && format_drv != NULL && format_drv->free != NULL) {
 		format_drv->free(format_drv, &image);
@@ -597,7 +725,7 @@ int main(int argc, const char **argv)
 	if (asmc_ready) {
 		asmc_free(&asmc);
 	}
-	if (asmc_llir_ready) {
+	if (asmc_out_ready) {
 		asmc_free(&asmc_out);
 	}
 	fs_free(&fs);
