@@ -132,7 +132,9 @@ TEST(llir_types_gen_null_cflow)
 
 	llir_types_t types = {0};
 	EXPECT_NE(llir_types_init(&types, 1, ALLOC_STD), NULL);
+	log_set_quiet(0, 1);
 	EXPECT_EQ(llir_types_gen(&types, &expr, &vars, NULL), 0);
+	log_set_quiet(0, 0);
 
 	const llir_types_node_t *node = arr_get(&types.nodes, 0);
 	EXPECT_NE(node, NULL);
@@ -174,7 +176,9 @@ TEST(llir_types_gen_binary_rhs_fallback)
 
 	llir_types_t types = {0};
 	EXPECT_NE(llir_types_init(&types, 1, ALLOC_STD), NULL);
+	log_set_quiet(0, 1);
 	EXPECT_EQ(llir_types_gen(&types, &expr, &vars, NULL), 0);
+	log_set_quiet(0, 0);
 
 	const llir_types_node_t *node = arr_get(&types.nodes, 1);
 	EXPECT_NE(node, NULL);

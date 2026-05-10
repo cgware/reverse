@@ -680,7 +680,9 @@ TEST(llir_vars_print_exhaustive)
 	EXPECT_EQ(llir_vars_gen(&vars, &expr), 0);
 
 	char out[1024] = {0};
+	log_set_quiet(0, 1);
 	EXPECT_GT(llir_vars_print(&vars, &expr, DST_BUF(out)), 0);
+	log_set_quiet(0, 0);
 	strv_t text = STRVT(out);
 	EXPECT_EQ(t_vars_contains(text, STRV("vars:\n")), 1);
 	EXPECT_EQ(t_vars_contains(text, STRV("R0 [1..4]")), 1);

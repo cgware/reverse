@@ -2081,7 +2081,9 @@ TEST(llir_expr_print_manual)
 
 	char out[1024] = {0};
 	dst_t dst = DST_BUF(out);
+	log_set_quiet(0, 1);
 	size_t len = llir_expr_print(&expr, dst);
+	log_set_quiet(0, 0);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_expr_str_contains(STRVN(out, len), STRV("xram[")), 1);
 	EXPECT_EQ(t_expr_str_contains(STRVN(out, len), STRV("iram[")), 1);
@@ -2226,11 +2228,15 @@ TEST(llir_expr_print_exhaustive)
 
 	llir_expr_t expr = {0};
 	EXPECT_NE(llir_expr_init(&expr, 4, ALLOC_STD), NULL);
+	log_set_quiet(0, 1);
 	EXPECT_EQ(llir_expr_gen(&expr, &ssa), 0);
+	log_set_quiet(0, 0);
 
 	char out[256] = {0};
 	dst_t dst = DST_BUF(out);
+	log_set_quiet(0, 1);
 	size_t len = llir_expr_print(&expr, dst);
+	log_set_quiet(0, 0);
 	EXPECT_GT(len, 0);
 	EXPECT_EQ(t_expr_str_contains(STRVN(out, len), STRV("phi(")), 1);
 	EXPECT_EQ(t_expr_str_contains(STRVN(out, len), STRV("+=")), 1);
